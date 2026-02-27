@@ -10,6 +10,10 @@ Each entry corresponds to a milestone or key architectural decision.
 | # | 日期 | 标题 | 文件 |
 |---|------|------|------|
 | 0 | 2026-02-28 | 创世纪：从零到骨架 | [000_genesis.md](000_genesis.md) |
+| 1 | 2026-02-28 | 高阶模型与 iLQR 求解器 | [001_higher_order_and_ilqr.md](001_higher_order_and_ilqr.md) |
+| 2 | 2026-02-28 | 消灭 Stubs + Lattice Planner + Profiling | [002_stubs_lattice_profiling.md](002_stubs_lattice_profiling.md) |
+| 3 | 2026-02-28 | SQP 求解器 + Canvas 增强 + 规划场景 | [003_sqp_canvas_scenarios.md](003_sqp_canvas_scenarios.md) |
+| 4 | 2026-02-28 | SE(2)-MPCC：基于进度变量的路径跟踪轨迹优化 | [004_se2_mpcc.md](004_se2_mpcc.md) |
 
 ---
 

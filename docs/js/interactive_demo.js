@@ -1,913 +1,531 @@
 /**
- * Kinetra Interactive Demo
- * ════════════════════════
- * A fully in-browser 2D motion planning playground.
+ * Kinetra Interactive Demo — WebAssembly Edition
  *
- * Features:
- *   • Click to place start / goal / circle obstacles
- *   • RRT* and Greedy Best-First Search algorithms
- *   • Animated tree growth & path rendering
- *   • Preset scenarios (Narrow Gap, Maze)
- *   • Adjustable parameters (step size, goal bias, speed, …)
+ * All planning and trajectory optimisation runs in the ACTUAL C++ library
+ * compiled to WebAssembly via Emscripten.  Zero algorithms are reimplemented
+ * in JavaScript — this file only handles:
+ *   1. Canvas rendering (obstacles, paths, trajectories, heading arrows)
+ *   2. UI interaction (click placement, sliders, state inputs)
+ *   3. Calling the C++ Wasm module and parsing JSON results
+ *   4. Plotly velocity profile rendering
  */
 
-// ── State ────────────────────────────────────────────────────────────────────
+/* global KinetraModule, Plotly */
+
+// ═════════════════════════════════════════════════════════════════════════
+// State
+// ═════════════════════════════════════════════════════════════════════════
 const demo = {
     canvas: null,
     ctx: null,
-    W: 900,   // logical canvas width (will scale to CSS)
-    H: 600,
-    // World bounds in metres
+    dpr: 1,
+    wasm: null,
+    wasmReady: false,
+
     world: { xmin: -10, xmax: 10, ymin: -7, ymax: 7 },
-    mode: 'start',   // 'start' | 'goal' | 'obstacle'
-    start: null,      // {x, y}
-    goal: null,       // {x, y}
-    obstacles: [],    // [{cx, cy, r}]
-    tree: [],         // [{x, y, parent}]  (parent = index or -1)
-    path: [],         // [{x, y}]
-    stompRollouts: [], // [[{x,y},...], ...] for visualization
-    latticeExpanded: [], // [{x, y}] expanded cells
-    planning: false,
-    animHandle: null,
+
+    mode: 'start',
+    start: null,
+    goal: null,
+    obstacles: [],
+    obsRadius: 0.8,
+
+    rrtIterations: 3000,
+    ilqrHorizon: 50,
+    model: 'DiffDriveSimple',
+    optimizer: 'iLQR',
+
+    rrtPath: null,
+    optPath: null,
+    rrtResult: null,
+    optResult: null,
+    running: false,
 };
 
-// ── Coordinate transforms ────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// Coordinate transforms
+// ═════════════════════════════════════════════════════════════════════════
 function worldToCanvas(wx, wy) {
+    const cw = demo.canvas.width / demo.dpr;
+    const ch = demo.canvas.height / demo.dpr;
     const { xmin, xmax, ymin, ymax } = demo.world;
-    const px = ((wx - xmin) / (xmax - xmin)) * demo.W;
-    const py = ((ymax - wy) / (ymax - ymin)) * demo.H;  // flip Y
-    return [px, py];
+    return [((wx - xmin) / (xmax - xmin)) * cw,
+            ((ymax - wy) / (ymax - ymin)) * ch];
 }
 
-function canvasToWorld(px, py) {
+function canvasToWorld(cx, cy) {
+    const cw = demo.canvas.width / demo.dpr;
+    const ch = demo.canvas.height / demo.dpr;
     const { xmin, xmax, ymin, ymax } = demo.world;
-    const wx = xmin + (px / demo.W) * (xmax - xmin);
-    const wy = ymax - (py / demo.H) * (ymax - ymin);
-    return [wx, wy];
+    return [xmin + (cx / cw) * (xmax - xmin),
+            ymax - (cy / ch) * (ymax - ymin)];
 }
 
-function worldDist(a, b) {
-    return Math.hypot(a.x - b.x, a.y - b.y);
+function worldScale(dist) {
+    const cw = demo.canvas.width / demo.dpr;
+    return (dist / (demo.world.xmax - demo.world.xmin)) * cw;
 }
 
-function worldScale(metres) {
-    const { xmin, xmax } = demo.world;
-    return (metres / (xmax - xmin)) * demo.W;
+// ═════════════════════════════════════════════════════════════════════════
+// Theme-aware colours
+// ═════════════════════════════════════════════════════════════════════════
+function getColor(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue('--' + name).trim();
 }
 
-// ── Collision ────────────────────────────────────────────────────────────────
-function pointFree(p) {
-    for (const o of demo.obstacles) {
-        if (Math.hypot(p.x - o.cx, p.y - o.cy) <= o.r) return false;
-    }
-    return true;
-}
-
-function segmentFree(a, b, steps = 20) {
-    for (let i = 0; i <= steps; i++) {
-        const t = i / steps;
-        const p = { x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) };
-        if (!pointFree(p)) return false;
-    }
-    return true;
-}
-
-// ── Drawing ──────────────────────────────────────────────────────────────────
-function draw() {
+// ═════════════════════════════════════════════════════════════════════════
+// Drawing
+// ═════════════════════════════════════════════════════════════════════════
+function drawAll() {
     const ctx = demo.ctx;
-    ctx.clearRect(0, 0, demo.W, demo.H);
+    const cw = demo.canvas.width / demo.dpr;
+    const ch = demo.canvas.height / demo.dpr;
 
-    // Background grid
-    ctx.strokeStyle = '#21262d';
+    ctx.save();
+    ctx.scale(demo.dpr, demo.dpr);
+
+    ctx.fillStyle = getColor('canvas-bg');
+    ctx.fillRect(0, 0, cw, ch);
+
+    drawGrid(ctx, cw, ch);
+    drawObstacles(ctx);
+    drawPath(ctx, demo.rrtPath, getColor('text-muted'), 1.5, true);
+    drawPath(ctx, demo.optPath, getColor('accent'), 2.5, false);
+    drawHeadingArrows(ctx, demo.optPath || demo.rrtPath);
+    drawEndpoint(ctx, demo.start, getColor('green'), 'S');
+    drawEndpoint(ctx, demo.goal, getColor('red'), 'G');
+
+    ctx.restore();
+}
+
+function drawGrid(ctx, cw, ch) {
+    ctx.strokeStyle = getColor('grid-line');
     ctx.lineWidth = 0.5;
+    ctx.setLineDash([2, 4]);
     const { xmin, xmax, ymin, ymax } = demo.world;
-    for (let gx = Math.ceil(xmin); gx <= Math.floor(xmax); gx++) {
-        const [px] = worldToCanvas(gx, 0);
-        ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, demo.H); ctx.stroke();
+    for (let x = Math.ceil(xmin); x <= xmax; x++) {
+        const [px] = worldToCanvas(x, 0);
+        ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, ch); ctx.stroke();
     }
-    for (let gy = Math.ceil(ymin); gy <= Math.floor(ymax); gy++) {
-        const [, py] = worldToCanvas(0, gy);
-        ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(demo.W, py); ctx.stroke();
+    for (let y = Math.ceil(ymin); y <= ymax; y++) {
+        const [, py] = worldToCanvas(0, y);
+        ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(cw, py); ctx.stroke();
     }
+    ctx.setLineDash([]);
+    ctx.strokeStyle = getColor('border');
+    ctx.lineWidth = 1;
+    const [ox, oy] = worldToCanvas(0, 0);
+    ctx.beginPath(); ctx.moveTo(ox, 0); ctx.lineTo(ox, ch); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, oy); ctx.lineTo(cw, oy); ctx.stroke();
+}
 
-    // Obstacles
-    for (const o of demo.obstacles) {
-        const [cx, cy] = worldToCanvas(o.cx, o.cy);
-        const r = worldScale(o.r);
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(248,81,73,0.25)';
-        ctx.fill();
-        ctx.strokeStyle = '#f85149';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-    }
-
-    // Tree edges
-    if (demo.tree.length > 1) {
-        ctx.strokeStyle = 'rgba(48,54,61,0.7)';
-        ctx.lineWidth = 0.8;
-        for (let i = 1; i < demo.tree.length; i++) {
-            const node = demo.tree[i];
-            if (node.parent < 0) continue;
-            const parent = demo.tree[node.parent];
-            const [x1, y1] = worldToCanvas(parent.x, parent.y);
-            const [x2, y2] = worldToCanvas(node.x, node.y);
-            ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-        }
-    }
-
-    // Lattice expanded cells
-    if (demo.latticeExpanded.length > 0) {
-        ctx.fillStyle = 'rgba(88,166,255,0.08)';
-        const cellPx = worldScale(0.5);
-        for (const pt of demo.latticeExpanded) {
-            const [px, py] = worldToCanvas(pt.x, pt.y);
-            ctx.fillRect(px - cellPx / 2, py - cellPx / 2, cellPx, cellPx);
-        }
-    }
-
-    // STOMP rollouts
-    if (demo.stompRollouts.length > 0) {
-        for (const rollout of demo.stompRollouts) {
-            if (rollout.length < 2) continue;
-            ctx.strokeStyle = 'rgba(210,153,34,0.15)';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            const [sx, sy] = worldToCanvas(rollout[0].x, rollout[0].y);
-            ctx.moveTo(sx, sy);
-            for (let i = 1; i < rollout.length; i++) {
-                const [px, py] = worldToCanvas(rollout[i].x, rollout[i].y);
-                ctx.lineTo(px, py);
-            }
-            ctx.stroke();
-        }
-    }
-
-    // Path
-    if (demo.path.length >= 2) {
-        ctx.strokeStyle = '#58a6ff';
-        ctx.lineWidth = 3;
-        ctx.shadowColor = '#58a6ff';
-        ctx.shadowBlur = 8;
-        ctx.beginPath();
-        const [sx, sy] = worldToCanvas(demo.path[0].x, demo.path[0].y);
-        ctx.moveTo(sx, sy);
-        for (let i = 1; i < demo.path.length; i++) {
-            const [px, py] = worldToCanvas(demo.path[i].x, demo.path[i].y);
-            ctx.lineTo(px, py);
-        }
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-    }
-
-    // Start
-    if (demo.start) {
-        const [sx, sy] = worldToCanvas(demo.start.x, demo.start.y);
-        ctx.beginPath();
-        ctx.arc(sx, sy, 8, 0, Math.PI * 2);
-        ctx.fillStyle = '#3fb950';
-        ctx.fill();
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-    }
-
-    // Goal
-    if (demo.goal) {
-        const [gx, gy] = worldToCanvas(demo.goal.x, demo.goal.y);
-        drawStar(ctx, gx, gy, 5, 10, 5);
-        ctx.fillStyle = '#f85149';
-        ctx.fill();
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 2;
-        ctx.stroke();
+function drawObstacles(ctx) {
+    ctx.fillStyle = getColor('red') + '40';
+    ctx.strokeStyle = getColor('red') + '90';
+    ctx.lineWidth = 1.5;
+    for (const obs of demo.obstacles) {
+        const [cx, cy] = worldToCanvas(obs.cx, obs.cy);
+        const r = worldScale(obs.r);
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     }
 }
 
-function drawStar(ctx, cx, cy, spikes, outerR, innerR) {
-    let rot = -Math.PI / 2;
+function drawPath(ctx, path, color, width, dashed) {
+    if (!path || path.length < 2) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.setLineDash(dashed ? [6, 4] : []);
     ctx.beginPath();
-    for (let i = 0; i < spikes; i++) {
-        ctx.lineTo(cx + Math.cos(rot) * outerR, cy + Math.sin(rot) * outerR);
-        rot += Math.PI / spikes;
-        ctx.lineTo(cx + Math.cos(rot) * innerR, cy + Math.sin(rot) * innerR);
-        rot += Math.PI / spikes;
+    const [sx, sy] = worldToCanvas(path[0].x, path[0].y);
+    ctx.moveTo(sx, sy);
+    for (let i = 1; i < path.length; i++) {
+        const [px, py] = worldToCanvas(path[i].x, path[i].y);
+        ctx.lineTo(px, py);
     }
-    ctx.closePath();
+    ctx.stroke();
+    ctx.setLineDash([]);
 }
 
-// ── RRT* Algorithm ───────────────────────────────────────────────────────────
-function rrtStarStep(tree, goal, opts) {
-    const { xmin, xmax, ymin, ymax } = demo.world;
-    const { stepSize, goalBias } = opts;
-
-    // Sample random or goal-biased
-    let sample;
-    if (Math.random() < goalBias) {
-        sample = { x: goal.x, y: goal.y };
-    } else {
-        sample = {
-            x: xmin + Math.random() * (xmax - xmin),
-            y: ymin + Math.random() * (ymax - ymin),
-        };
+function drawHeadingArrows(ctx, path) {
+    if (!path || path.length < 2) return;
+    const step = Math.max(1, Math.floor(path.length / 20));
+    ctx.strokeStyle = getColor('green');
+    ctx.lineWidth = 1.5;
+    const arrowLen = worldScale(0.4);
+    for (let i = 0; i < path.length; i += step) {
+        const [px, py] = worldToCanvas(path[i].x, path[i].y);
+        const th = path[i].theta || 0;
+        const ex = px + arrowLen * Math.cos(-th);
+        const ey = py + arrowLen * Math.sin(-th);
+        ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(ex, ey); ctx.stroke();
+        const hl = arrowLen * 0.3;
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - hl * Math.cos(-th - 0.4), ey - hl * Math.sin(-th - 0.4));
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - hl * Math.cos(-th + 0.4), ey - hl * Math.sin(-th + 0.4));
+        ctx.stroke();
     }
+}
 
-    // Find nearest node
-    let nearestIdx = 0;
-    let nearestDist = Infinity;
-    for (let i = 0; i < tree.length; i++) {
-        const d = worldDist(tree[i], sample);
-        if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
+function drawEndpoint(ctx, point, color, label) {
+    if (!point) return;
+    const [px, py] = worldToCanvas(point.x, point.y);
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(px, py, 8, 0, Math.PI * 2); ctx.fill();
+    if (point.theta !== undefined) {
+        const len = worldScale(0.6);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px + len * Math.cos(-point.theta), py + len * Math.sin(-point.theta));
+        ctx.stroke();
     }
-    const nearest = tree[nearestIdx];
+    ctx.fillStyle = getColor('canvas-bg');
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, px, py);
+}
 
-    // Steer
-    const d = nearestDist;
-    const newPt = d <= stepSize ? { ...sample } : {
-        x: nearest.x + (sample.x - nearest.x) / d * stepSize,
-        y: nearest.y + (sample.y - nearest.y) / d * stepSize,
+// ═════════════════════════════════════════════════════════════════════════
+// Wasm initialisation
+// ═════════════════════════════════════════════════════════════════════════
+async function initWasm() {
+    const statusEl = document.getElementById('wasm-status');
+    try {
+        demo.wasm = await KinetraModule();
+        demo.wasmReady = true;
+        statusEl.textContent = 'WASM Ready';
+        statusEl.className = 'wasm-status ready';
+        enablePlanButtons(true);
+        console.log('Kinetra WASM loaded:', JSON.parse(demo.wasm.getVersion()));
+    } catch (e) {
+        statusEl.textContent = 'WASM Error';
+        statusEl.className = 'wasm-status error';
+        console.error('Failed to load Kinetra WASM:', e);
+    }
+}
+
+function enablePlanButtons(en) {
+    document.getElementById('btn-plan').disabled = !en;
+    document.getElementById('btn-rrt-only').disabled = !en;
+    document.getElementById('btn-opt-only').disabled = !en;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Build JSON problem for C++ Wasm
+// ═════════════════════════════════════════════════════════════════════════
+function buildProblemJSON(extra) {
+    const s = demo.start || { x: -7, y: 0, theta: 0 };
+    const g = demo.goal  || { x: 7, y: 0, theta: 0 };
+    return {
+        start: { x: s.x, y: s.y, theta: s.theta || 0 },
+        goal:  { x: g.x, y: g.y, theta: g.theta || 0 },
+        environment: {
+            bounds: { min: [demo.world.xmin, demo.world.ymin], max: [demo.world.xmax, demo.world.ymax] },
+            obstacles: demo.obstacles.map(o => ({ type: 'circle', center: [o.cx, o.cy], radius: o.r })),
+        },
+        options: { maxIterations: demo.rrtIterations, timeLimitMs: 10000, goalTolerance: 0.5 },
+        ...extra,
     };
-
-    if (!pointFree(newPt) || !segmentFree(nearest, newPt)) return null;
-
-    // Near neighbors for rewire (RRT* radius)
-    const gamma = 2.0 * Math.sqrt((xmax - xmin) * (ymax - ymin) / Math.PI);
-    const rStar = Math.min(gamma * Math.pow(Math.log(tree.length + 1) / (tree.length + 1), 0.5), stepSize * 3);
-    let bestParent = nearestIdx;
-    let bestCost = (tree[nearestIdx].cost || 0) + worldDist(nearest, newPt);
-
-    const nearIdxs = [];
-    for (let i = 0; i < tree.length; i++) {
-        if (worldDist(tree[i], newPt) < rStar) nearIdxs.push(i);
-    }
-
-    for (const ni of nearIdxs) {
-        const nc = (tree[ni].cost || 0) + worldDist(tree[ni], newPt);
-        if (nc < bestCost && segmentFree(tree[ni], newPt)) {
-            bestCost = nc;
-            bestParent = ni;
-        }
-    }
-
-    const newNode = { x: newPt.x, y: newPt.y, parent: bestParent, cost: bestCost };
-    const newIdx = tree.length;
-    tree.push(newNode);
-
-    // Rewire neighbors
-    for (const ni of nearIdxs) {
-        const rc = bestCost + worldDist(newPt, tree[ni]);
-        if (rc < (tree[ni].cost || Infinity) && segmentFree(newPt, tree[ni])) {
-            tree[ni].parent = newIdx;
-            tree[ni].cost = rc;
-        }
-    }
-
-    return newNode;
 }
 
-// ── Greedy Best-First (grid-based for fast demo) ─────────────────────────────
-function greedyBestFirst(start, goal, obstacles) {
-    const cellSize = 0.25;
-    const { xmin, xmax, ymin, ymax } = demo.world;
-    const cols = Math.ceil((xmax - xmin) / cellSize);
-    const rows = Math.ceil((ymax - ymin) / cellSize);
+// ═════════════════════════════════════════════════════════════════════════
+// Planning entry points (calls C++ via Wasm)
+// ═════════════════════════════════════════════════════════════════════════
+async function runPipeline() {
+    if (!demo.wasmReady || demo.running) return;
+    demo.running = true;
+    enablePlanButtons(false);
+    setStatus('Running RRT* + ' + demo.optimizer + '...');
+    setPipelineState('rrt');
 
-    function toGrid(wx, wy) {
-        return [Math.floor((wx - xmin) / cellSize), Math.floor((ymax - wy) / cellSize)];
-    }
-    function toWorld(gx, gy) {
-        return { x: xmin + (gx + 0.5) * cellSize, y: ymax - (gy + 0.5) * cellSize };
-    }
-    function key(gx, gy) { return `${gx},${gy}`; }
-    function heuristic(gx, gy) {
-        const w = toWorld(gx, gy);
-        return worldDist(w, goal);
-    }
+    const json = buildProblemJSON({
+        model: demo.model, optimizer: demo.optimizer,
+        rrtOptions: { maxIterations: demo.rrtIterations, stepSize: 0.5, goalBias: 0.1 },
+        ilqrOptions: { horizon: demo.ilqrHorizon, dt: 0.05 },
+        stompOptions: { numRollouts: 30, noiseSigma: 0.5 },
+    });
 
-    const [sx, sy] = toGrid(start.x, start.y);
-    const [gx, gy] = toGrid(goal.x, goal.y);
-
-    // Open set as simple sorted list (good enough for demo)
-    const open = [{ gx: sx, gy: sy, h: heuristic(sx, sy), parent: null }];
-    const closed = new Set();
-    const parentMap = new Map();
-    const treeEdges = [];
-
-    const dirs = [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
-
-    let found = false;
-    let iterations = 0;
-
-    while (open.length > 0 && iterations < 50000) {
-        iterations++;
-        // Pick smallest heuristic
-        let bestIdx = 0;
-        for (let i = 1; i < open.length; i++) {
-            if (open[i].h < open[bestIdx].h) bestIdx = i;
+    try {
+        const result = JSON.parse(demo.wasm.planPipeline(JSON.stringify(json)));
+        if (result.error) { setStatus('Error: ' + result.error); }
+        else {
+            setPipelineState('opt');
+            demo.rrtResult = result.rrt;
+            demo.rrtPath = result.rrt?.trajectory || null;
+            demo.optResult = result.optimized;
+            demo.optPath = result.optimized?.trajectory || null;
+            updateRRTStats(result.rrt);
+            updateOptStats(result.optimized);
+            renderVelocityProfile(demo.optPath || demo.rrtPath);
+            setPipelineState('done');
+            setStatus('Pipeline complete — RRT*: ' +
+                (result.rrt?.solve_time_ms?.toFixed(1) || '?') + 'ms, ' +
+                demo.optimizer + ': ' +
+                (result.optimized?.solve_time_ms?.toFixed(1) || '?') + 'ms');
         }
-        const curr = open.splice(bestIdx, 1)[0];
-        const ck = key(curr.gx, curr.gy);
-        if (closed.has(ck)) continue;
-        closed.add(ck);
-        if (curr.parent !== null) parentMap.set(ck, curr.parent);
+    } catch (e) { setStatus('Error: ' + e.message); }
 
-        // Record tree edge for visualization
-        if (curr.parent) {
-            treeEdges.push({ from: toWorld(curr.parent.gx, curr.parent.gy), to: toWorld(curr.gx, curr.gy) });
-        }
-
-        if (curr.gx === gx && curr.gy === gy) { found = true; break; }
-
-        for (const [dx, dy] of dirs) {
-            const nx = curr.gx + dx, ny = curr.gy + dy;
-            if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
-            const nk = key(nx, ny);
-            if (closed.has(nk)) continue;
-            const wp = toWorld(nx, ny);
-            if (!pointFree(wp)) continue;
-            open.push({ gx: nx, gy: ny, h: heuristic(nx, ny), parent: { gx: curr.gx, gy: curr.gy } });
-        }
-    }
-
-    // Reconstruct path
-    const path = [];
-    if (found) {
-        let ck = key(gx, gy);
-        while (ck) {
-            const [a, b] = ck.split(',').map(Number);
-            path.unshift(toWorld(a, b));
-            const p = parentMap.get(ck);
-            ck = p ? key(p.gx, p.gy) : null;
-        }
-    }
-
-    return { path, treeEdges, iterations };
+    demo.running = false;
+    enablePlanButtons(true);
+    drawAll();
 }
 
-// ── Planning dispatch ────────────────────────────────────────────────────────
-function runPlanning() {
-    if (demo.planning) return;
-    if (!demo.start || !demo.goal) {
-        setStatus('⚠ Place both Start (green) and Goal (red) first.');
-        return;
-    }
+async function runRRTOnly() {
+    if (!demo.wasmReady || demo.running) return;
+    demo.running = true;
+    enablePlanButtons(false);
+    setStatus('Running RRT*...');
+    setPipelineState('rrt');
 
-    demo.planning = true;
-    demo.tree = [];
-    demo.path = [];
-    demo.stompRollouts = [];
-    draw();
+    const json = buildProblemJSON({
+        plannerOptions: { maxIterations: demo.rrtIterations, stepSize: 0.5, goalBias: 0.1 },
+    });
 
-    const algo = document.getElementById('algo-select').value;
-    const maxIters = parseInt(document.getElementById('max-iters').value);
-    const stepSize = parseFloat(document.getElementById('step-size').value);
-    const goalBias = parseFloat(document.getElementById('goal-bias').value);
-    const animSpeed = parseInt(document.getElementById('anim-speed').value);
+    try {
+        const result = JSON.parse(demo.wasm.planRRTStar(JSON.stringify(json)));
+        if (result.error) { setStatus('Error: ' + result.error); }
+        else {
+            const r = result.result || result;
+            demo.rrtResult = r;
+            demo.rrtPath = r.trajectory || null;
+            demo.optPath = null; demo.optResult = null;
+            updateRRTStats(r);
+            clearOptStats();
+            renderVelocityProfile(demo.rrtPath);
+            setPipelineState('done');
+            setStatus('RRT* complete — ' + (r.solve_time_ms?.toFixed(1) || '?') + 'ms');
+        }
+    } catch (e) { setStatus('Error: ' + e.message); }
 
-    document.getElementById('btn-plan').textContent = '⏳ Planning…';
-
-    if (algo === 'rrt-star') {
-        runRRTStarAnimated(maxIters, stepSize, goalBias, animSpeed);
-    } else if (algo === 'lattice') {
-        runLatticeAnimated(animSpeed);
-    } else if (algo === 'stomp') {
-        runSTOMPAnimated(animSpeed);
-    } else {
-        runGreedyAnimated(animSpeed);
-    }
+    demo.running = false;
+    enablePlanButtons(true);
+    drawAll();
 }
 
-function runRRTStarAnimated(maxIters, stepSize, goalBias, batchPerFrame) {
-    demo.tree = [{ x: demo.start.x, y: demo.start.y, parent: -1, cost: 0 }];
-    let iter = 0;
-    const goalTol = stepSize * 1.2;
-    const t0 = performance.now();
+async function runOptOnly() {
+    if (!demo.wasmReady || demo.running) return;
+    demo.running = true;
+    enablePlanButtons(false);
+    setStatus('Running ' + demo.optimizer + '...');
+    setPipelineState('opt');
 
-    function frame() {
-        for (let b = 0; b < batchPerFrame && iter < maxIters; b++, iter++) {
-            rrtStarStep(demo.tree, demo.goal, { stepSize, goalBias });
+    const opt = demo.optimizer;
+    const json = opt === 'STOMP'
+        ? buildProblemJSON({ plannerOptions: { numTimesteps: 60, numRollouts: 30, maxIterations: 100, noiseSigma: 0.5 } })
+        : buildProblemJSON({ model: demo.model, plannerOptions: { horizon: demo.ilqrHorizon, dt: 0.05, maxIterations: 100 } });
+
+    try {
+        const raw = opt === 'STOMP'
+            ? demo.wasm.optimizeSTOMP(JSON.stringify(json))
+            : demo.wasm.optimizeiLQR(JSON.stringify(json));
+        const result = JSON.parse(raw);
+        if (result.error) { setStatus('Error: ' + result.error); }
+        else {
+            const r = result.result || result;
+            demo.optResult = r;
+            demo.optPath = r.trajectory || null;
+            updateOptStats(r);
+            renderVelocityProfile(demo.optPath);
+            setPipelineState('done');
+            setStatus(opt + ' complete — ' + (r.solve_time_ms?.toFixed(1) || '?') + 'ms');
         }
+    } catch (e) { setStatus('Error: ' + e.message); }
 
-        // Check if any node near goal
-        let goalNodeIdx = -1;
-        let bestGoalCost = Infinity;
-        for (let i = 0; i < demo.tree.length; i++) {
-            if (worldDist(demo.tree[i], demo.goal) < goalTol) {
-                const c = demo.tree[i].cost + worldDist(demo.tree[i], demo.goal);
-                if (c < bestGoalCost) { bestGoalCost = c; goalNodeIdx = i; }
-            }
-        }
-
-        draw();
-        setStatus(`RRT* — iteration ${iter} / ${maxIters} | tree: ${demo.tree.length} nodes`);
-        updateDemoStats(demo.tree.length, null, performance.now() - t0, iter);
-
-        if (iter >= maxIters || goalNodeIdx >= 0) {
-            // Extract path
-            if (goalNodeIdx >= 0) {
-                demo.path = [{ x: demo.goal.x, y: demo.goal.y }];
-                let idx = goalNodeIdx;
-                while (idx >= 0) {
-                    demo.path.unshift({ x: demo.tree[idx].x, y: demo.tree[idx].y });
-                    idx = demo.tree[idx].parent;
-                }
-                const pathLen = computePathLength(demo.path);
-                setStatus(`✅ RRT* — Path found! Length: ${pathLen.toFixed(2)} m | ${iter} iterations`);
-                updateDemoStats(demo.tree.length, pathLen, performance.now() - t0, iter);
-            } else {
-                setStatus(`⚠ RRT* — No path found in ${maxIters} iterations.`);
-            }
-            draw();
-            demo.planning = false;
-            document.getElementById('btn-plan').textContent = '▶ Plan';
-            return;
-        }
-
-        demo.animHandle = requestAnimationFrame(frame);
-    }
-
-    demo.animHandle = requestAnimationFrame(frame);
+    demo.running = false;
+    enablePlanButtons(true);
+    drawAll();
 }
 
-function runGreedyAnimated(batchPerFrame) {
-    const t0 = performance.now();
-    const result = greedyBestFirst(demo.start, demo.goal, demo.obstacles);
-    const elapsed = performance.now() - t0;
+// ═════════════════════════════════════════════════════════════════════════
+// UI helpers
+// ═════════════════════════════════════════════════════════════════════════
+function setStatus(msg) { document.getElementById('demo-status').textContent = msg; }
 
-    // Convert tree edges to our tree format for drawing
-    demo.tree = [{ x: demo.start.x, y: demo.start.y, parent: -1 }];
-    // Animate tree edge drawing
-    let edgeIdx = 0;
-    const edgesPerFrame = Math.max(1, batchPerFrame * 5);
-
-    function frame() {
-        for (let b = 0; b < edgesPerFrame && edgeIdx < result.treeEdges.length; b++, edgeIdx++) {
-            const e = result.treeEdges[edgeIdx];
-            const parentIdx = demo.tree.length - 1; // approximate for visual
-            demo.tree.push({ x: e.to.x, y: e.to.y, parent: Math.max(0, parentIdx) });
-        }
-
-        draw();
-        setStatus(`Greedy BFS — expanding ${edgeIdx} / ${result.treeEdges.length} nodes`);
-
-        if (edgeIdx >= result.treeEdges.length) {
-            demo.path = result.path;
-            draw();
-            const pathLen = result.path.length > 0 ? computePathLength(result.path) : 0;
-            if (result.path.length > 0) {
-                setStatus(`✅ Greedy BFS — Path found! Length: ${pathLen.toFixed(2)} m | ${result.iterations} cells explored`);
-            } else {
-                setStatus(`⚠ Greedy BFS — No path found.`);
-            }
-            updateDemoStats(result.treeEdges.length, pathLen, elapsed, result.iterations);
-            demo.planning = false;
-            document.getElementById('btn-plan').textContent = '▶ Plan';
-            return;
-        }
-
-        demo.animHandle = requestAnimationFrame(frame);
-    }
-
-    demo.animHandle = requestAnimationFrame(frame);
+function setPipelineState(state) {
+    ['rrt', 'opt', 'done'].forEach((s, i) => {
+        const el = document.getElementById('pipe-' + s);
+        el.classList.remove('active', 'done');
+    });
+    const idx = ['rrt', 'opt', 'done'].indexOf(state);
+    for (let i = 0; i < idx; i++) document.getElementById('pipe-' + ['rrt', 'opt', 'done'][i]).classList.add('done');
+    if (idx >= 0) document.getElementById('pipe-' + ['rrt', 'opt', 'done'][idx]).classList.add('active');
 }
 
-function computePathLength(path) {
-    let len = 0;
-    for (let i = 1; i < path.length; i++) len += worldDist(path[i - 1], path[i]);
-    return len;
+function updateRRTStats(r) {
+    if (!r) return;
+    document.getElementById('rrt-stat-nodes').textContent = r.iterations || '-';
+    document.getElementById('rrt-stat-length').textContent = r.path_length != null ? r.path_length.toFixed(2) : '-';
+    document.getElementById('rrt-stat-time').textContent = r.solve_time_ms != null ? r.solve_time_ms.toFixed(1) : '-';
 }
 
-// ── UI Helpers ───────────────────────────────────────────────────────────────
-function setStatus(msg) {
-    document.getElementById('demo-status').textContent = msg;
+function updateOptStats(r) {
+    if (!r) { clearOptStats(); return; }
+    document.getElementById('opt-stat-cost').textContent = r.cost != null ? r.cost.toFixed(2) : '-';
+    document.getElementById('opt-stat-smooth').textContent = r.smoothness != null ? r.smoothness.toFixed(4) : '-';
+    document.getElementById('opt-stat-time').textContent = r.solve_time_ms != null ? r.solve_time_ms.toFixed(1) : '-';
+    document.getElementById('opt-stat-curv').textContent = r.max_curvature != null ? r.max_curvature.toFixed(3) : '-';
 }
 
-function updateDemoStats(nodes, pathLen, timeMs, iters) {
-    document.getElementById('demo-stat-nodes').textContent = nodes ?? '—';
-    document.getElementById('demo-stat-length').textContent = pathLen !== null ? pathLen.toFixed(2) : '—';
-    document.getElementById('demo-stat-time').textContent = timeMs !== null ? timeMs.toFixed(1) : '—';
-    document.getElementById('demo-stat-iters').textContent = iters ?? '—';
+function clearOptStats() {
+    ['opt-stat-cost', 'opt-stat-smooth', 'opt-stat-time', 'opt-stat-curv']
+        .forEach(id => document.getElementById(id).textContent = '-');
 }
 
-function clearAll() {
-    if (demo.animHandle) cancelAnimationFrame(demo.animHandle);
-    demo.planning = false;
-    demo.start = null;
-    demo.goal = null;
-    demo.obstacles = [];
-    demo.tree = [];
-    demo.path = [];
-    demo.stompRollouts = [];
-    demo.latticeExpanded = [];
-    setStatus('Click the canvas to place Start, then Goal, then obstacles. Press ▶ Plan to run.');
-    updateDemoStats(null, null, null, null);
-    document.getElementById('btn-plan').textContent = '▶ Plan';
-    draw();
+// ═════════════════════════════════════════════════════════════════════════
+// Plotly velocity profile
+// ═════════════════════════════════════════════════════════════════════════
+function getPlotlyTheme() {
+    const dk = document.documentElement.getAttribute('data-theme') !== 'light';
+    return {
+        paper_bgcolor: dk ? '#0d1117' : '#ffffff',
+        plot_bgcolor:  dk ? '#161b22' : '#f6f8fa',
+        font:          { color: dk ? '#c9d1d9' : '#24292f' },
+        gridcolor:     dk ? '#30363d' : '#d0d7de',
+    };
 }
 
-// ── Lattice A* Algorithm ─────────────────────────────────────────────────────
-function latticeAStar(start, goal) {
-    const res = 0.5;  // grid resolution
-    const numAngles = 8;
-    const primLen = 1.2;
-    const maxExpand = 30000;
-    const { xmin, xmax, ymin, ymax } = demo.world;
-
-    // Discretize
-    function toGrid(wx, wy) {
-        return [Math.round(wx / res), Math.round(wy / res)];
+function renderVelocityProfile(path) {
+    const el = document.getElementById('plot-demo-velocity');
+    if (!path || path.length < 2) { Plotly.purge(el); return; }
+    const times = [], vels = [];
+    for (let i = 1; i < path.length; i++) {
+        const dx = path[i].x - path[i-1].x, dy = path[i].y - path[i-1].y;
+        const t1 = path[i].t || i * 0.1, t0 = path[i-1].t || (i-1) * 0.1;
+        const dt = t1 - t0;
+        times.push(t1);
+        vels.push(dt > 0 ? Math.sqrt(dx*dx + dy*dy) / dt : 0);
     }
-    function toWorld(gx, gy) {
-        return { x: gx * res, y: gy * res };
-    }
-
-    // Generate motion primitives for each heading
-    const primitives = [];
-    const steers = [-0.6, -0.3, 0, 0.3, 0.6];
-    for (let ti = 0; ti < numAngles; ti++) {
-        const theta = (ti / numAngles) * Math.PI * 2;
-        for (const steer of steers) {
-            const steps = 5;
-            const dt = primLen / steps;
-            let cx = 0, cy = 0, ct = theta;
-            const pts = [];
-            for (let s = 0; s < steps; s++) {
-                cx += dt * Math.cos(ct);
-                cy += dt * Math.sin(ct);
-                ct += steer * (dt / primLen);
-                pts.push({ x: cx, y: cy });
-            }
-            let endTi = Math.round(((ct % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) / (2 * Math.PI / numAngles)) % numAngles;
-            const cost = primLen * (1 + 0.5 * Math.abs(steer));
-            primitives.push({ startTi: ti, endTi, dx: cx, dy: cy, pts, cost });
-        }
-    }
-
-    const [sgx, sgy] = toGrid(start.x, start.y);
-    const [ggx, ggy] = toGrid(goal.x, goal.y);
-    const goalTol = Math.ceil(1.5 / res);
-
-    function key(gx, gy, ti) { return `${gx},${gy},${ti}`; }
-    function heuristic(gx, gy) {
-        return Math.hypot((gx - ggx) * res, (gy - ggy) * res);
-    }
-
-    // Priority queue (simple sorted array for demo)
-    const open = [];
-    const gScore = new Map();
-    const cameFrom = new Map();  // key -> {parentKey, prim}
-    const expanded = [];
-    const startTi = 0;
-    const sk = key(sgx, sgy, startTi);
-    open.push({ gx: sgx, gy: sgy, ti: startTi, f: heuristic(sgx, sgy), g: 0 });
-    gScore.set(sk, 0);
-
-    let found = null;
-    let expansions = 0;
-
-    while (open.length > 0 && expansions < maxExpand) {
-        // Extract min f
-        let bestIdx = 0;
-        for (let i = 1; i < open.length; i++) {
-            if (open[i].f < open[bestIdx].f) bestIdx = i;
-        }
-        const curr = open.splice(bestIdx, 1)[0];
-        const ck = key(curr.gx, curr.gy, curr.ti);
-
-        if (curr.g > (gScore.get(ck) ?? Infinity) + 1e-6) continue;
-        expansions++;
-        expanded.push(toWorld(curr.gx, curr.gy));
-
-        // Goal check
-        if (Math.abs(curr.gx - ggx) <= goalTol && Math.abs(curr.gy - ggy) <= goalTol) {
-            found = ck;
-            break;
-        }
-
-        const wc = toWorld(curr.gx, curr.gy);
-
-        for (const prim of primitives) {
-            if (prim.startTi !== curr.ti) continue;
-
-            const cos_t = Math.cos((curr.ti / numAngles) * 2 * Math.PI);
-            const sin_t = Math.sin((curr.ti / numAngles) * 2 * Math.PI);
-            const nx = wc.x + cos_t * prim.dx - sin_t * prim.dy;
-            const ny = wc.y + sin_t * prim.dx + cos_t * prim.dy;
-
-            if (nx < xmin || nx > xmax || ny < ymin || ny > ymax) continue;
-
-            // Collision check on intermediate points
-            let collision = false;
-            for (const pt of prim.pts) {
-                const wx = wc.x + cos_t * pt.x - sin_t * pt.y;
-                const wy = wc.y + sin_t * pt.x + cos_t * pt.y;
-                if (!pointFree({ x: wx, y: wy })) { collision = true; break; }
-            }
-            if (collision) continue;
-
-            const [ngx, ngy] = toGrid(nx, ny);
-            const nk = key(ngx, ngy, prim.endTi);
-            const newG = curr.g + prim.cost;
-            if (newG >= (gScore.get(nk) ?? Infinity)) continue;
-
-            gScore.set(nk, newG);
-            cameFrom.set(nk, { parent: ck, prim, wx: wc.x, wy: wc.y, cos_t, sin_t });
-            open.push({ gx: ngx, gy: ngy, ti: prim.endTi, f: newG + 1.5 * heuristic(ngx, ngy), g: newG });
-        }
-    }
-
-    // Reconstruct path
-    const path = [];
-    if (found) {
-        let ck = found;
-        const chain = [];
-        while (cameFrom.has(ck)) {
-            chain.unshift(cameFrom.get(ck));
-            ck = cameFrom.get(ck).parent;
-        }
-        // Start point
-        path.push({ x: start.x, y: start.y });
-        for (const link of chain) {
-            for (const pt of link.prim.pts) {
-                path.push({
-                    x: link.wx + link.cos_t * pt.x - link.sin_t * pt.y,
-                    y: link.wy + link.sin_t * pt.x + link.cos_t * pt.y,
-                });
-            }
-        }
-    }
-
-    return { path, expanded, expansions };
+    const th = getPlotlyTheme();
+    Plotly.newPlot(el, [{
+        x: times, y: vels, mode: 'lines',
+        line: { color: getColor('accent'), width: 2 },
+        fill: 'tozeroy', fillcolor: getColor('accent') + '20', name: 'Velocity',
+    }], {
+        paper_bgcolor: th.paper_bgcolor, plot_bgcolor: th.plot_bgcolor,
+        font: th.font, margin: { l: 50, r: 20, t: 10, b: 40 },
+        xaxis: { gridcolor: th.gridcolor, title: 'Time (s)' },
+        yaxis: { gridcolor: th.gridcolor, title: 'Velocity (m/s)' },
+    }, { responsive: true, displayModeBar: false });
 }
 
-function runLatticeAnimated(batchPerFrame) {
-    const t0 = performance.now();
-    const result = latticeAStar(demo.start, demo.goal);
-    const elapsed = performance.now() - t0;
+window.updatePlotlyTheme = function() {
+    renderVelocityProfile(demo.optPath || demo.rrtPath);
+};
 
-    demo.latticeExpanded = [];
-    let expandIdx = 0;
-    const expandsPerFrame = Math.max(1, batchPerFrame * 20);
+// ═════════════════════════════════════════════════════════════════════════
+// Presets
+// ═════════════════════════════════════════════════════════════════════════
+const PRESETS = {
+    narrowPassage: {
+        start: { x: -7, y: 0, theta: 0 }, goal: { x: 7, y: 0, theta: 0 },
+        obstacles: [{ cx: 0, cy: 3, r: 2.5 }, { cx: 0, cy: -3, r: 2.5 }],
+    },
+    uTurn: {
+        start: { x: -5, y: -4, theta: 0 }, goal: { x: -5, y: 4, theta: Math.PI },
+        obstacles: [{ cx: -2, cy: 0, r: 3 }, { cx: 3, cy: 3, r: 1.5 }, { cx: 3, cy: -3, r: 1.5 }],
+    },
+    clutteredField: {
+        start: { x: -8, y: -5, theta: 0.3 }, goal: { x: 8, y: 5, theta: -0.3 },
+        obstacles: [
+            { cx: -4, cy: 2, r: 1.2 }, { cx: -2, cy: -3, r: 1 },
+            { cx: 0, cy: 1, r: 0.8 }, { cx: 2, cy: -1, r: 1.1 },
+            { cx: 4, cy: 3, r: 1 }, { cx: 5, cy: -4, r: 1.3 },
+            { cx: -6, cy: -2, r: 0.9 }, { cx: 1, cy: 4, r: 0.7 },
+        ],
+    },
+    parallelParking: {
+        start: { x: -7, y: 2, theta: 0 }, goal: { x: 0, y: -2, theta: Math.PI / 2 },
+        obstacles: [{ cx: -2, cy: -2, r: 1.2 }, { cx: 2, cy: -2, r: 1.2 }, { cx: 0, cy: -5, r: 1.5 }],
+    },
+};
 
-    function frame() {
-        for (let b = 0; b < expandsPerFrame && expandIdx < result.expanded.length; b++, expandIdx++) {
-            demo.latticeExpanded.push(result.expanded[expandIdx]);
-        }
-        draw();
-        setStatus(`Lattice A* — expanded ${expandIdx} / ${result.expanded.length} cells`);
-
-        if (expandIdx >= result.expanded.length) {
-            demo.path = result.path;
-            draw();
-            const pathLen = result.path.length > 0 ? computePathLength(result.path) : 0;
-            if (result.path.length > 0) {
-                setStatus(`✅ Lattice A* — Path found! Length: ${pathLen.toFixed(2)} m | ${result.expansions} expansions`);
-            } else {
-                setStatus(`⚠ Lattice A* — No path found in ${result.expansions} expansions.`);
-            }
-            updateDemoStats(result.expansions, pathLen, elapsed, result.expansions);
-            demo.planning = false;
-            document.getElementById('btn-plan').textContent = '▶ Plan';
-            return;
-        }
-        demo.animHandle = requestAnimationFrame(frame);
-    }
-    demo.animHandle = requestAnimationFrame(frame);
+function applyPreset(name) {
+    const p = PRESETS[name]; if (!p) return;
+    demo.start = { ...p.start }; demo.goal = { ...p.goal };
+    demo.obstacles = p.obstacles.map(o => ({ ...o }));
+    demo.rrtPath = null; demo.optPath = null;
+    demo.rrtResult = null; demo.optResult = null;
+    syncStateInputs(); drawAll();
+    setStatus('Preset loaded — click Plan & Optimize to run.');
 }
 
-// ── STOMP Algorithm (in-browser) ────────────────────────────────────────────
-function stompSolve(start, goal, maxIters, numTimesteps, numRollouts) {
-    const T = numTimesteps;
-    const K = numRollouts;
-
-    // Initialize straight-line trajectory
-    const traj = [];
-    for (let i = 0; i <= T; i++) {
-        const t = i / T;
-        traj.push({
-            x: start.x + t * (goal.x - start.x),
-            y: start.y + t * (goal.y - start.y),
-        });
-    }
-
-    // Pre-compute finite-diff matrix inverse (M^{-1} for noise generation)
-    // We'll use scaled identity for simplicity in the demo
-    const invScale = 0.5;
-
-    // Cost function: obstacle proximity
-    function trajCost(tr) {
-        let total = 0;
-        for (let i = 1; i < tr.length - 1; i++) {
-            for (const o of demo.obstacles) {
-                const d = Math.hypot(tr[i].x - o.cx, tr[i].y - o.cy) - o.r;
-                if (d < 1.0) total += (1.0 - d) * 50.0;
-                if (d < 0) total += 500.0;
-            }
-            // Smoothness cost
-            if (i > 0 && i < tr.length - 1) {
-                const ax = tr[i - 1].x - 2 * tr[i].x + tr[i + 1].x;
-                const ay = tr[i - 1].y - 2 * tr[i].y + tr[i + 1].y;
-                total += (ax * ax + ay * ay) * 5.0;
-            }
-        }
-        return total;
-    }
-
-    const allRollouts = [];  // for visualization: collect rollouts per iteration
-    let bestCost = trajCost(traj);
-
-    for (let iter = 0; iter < maxIters; iter++) {
-        const rollouts = [];
-        const costs = [];
-        const iterRollouts = [];
-
-        for (let k = 0; k < K; k++) {
-            // Generate noisy trajectory
-            const noisy = traj.map((p, i) => {
-                if (i === 0 || i === T) return { ...p }; // fix endpoints
-                return {
-                    x: p.x + (Math.random() - 0.5) * invScale * 2,
-                    y: p.y + (Math.random() - 0.5) * invScale * 2,
-                };
-            });
-            rollouts.push(noisy);
-            costs.push(trajCost(noisy));
-            iterRollouts.push(noisy);
-        }
-
-        // Probability weighting (exp-utility)
-        const minCost = Math.min(...costs);
-        const h = 10.0;  // temperature
-        const weights = costs.map(c => Math.exp(-h * (c - minCost)));
-        const wSum = weights.reduce((a, b) => a + b, 0);
-
-        // Weighted average update
-        for (let i = 1; i < T; i++) {
-            let dx = 0, dy = 0;
-            for (let k = 0; k < K; k++) {
-                const w = weights[k] / wSum;
-                dx += w * (rollouts[k][i].x - traj[i].x);
-                dy += w * (rollouts[k][i].y - traj[i].y);
-            }
-            traj[i].x += dx;
-            traj[i].y += dy;
-        }
-
-        const newCost = trajCost(traj);
-        allRollouts.push(iterRollouts);
-        bestCost = newCost;
-
-        if (bestCost < 1.0) break;
-    }
-
-    return { path: traj, allRollouts, bestCost, iterations: allRollouts.length };
+function syncStateInputs() {
+    const s = demo.start || { x: -7, y: 0, theta: 0 };
+    const g = demo.goal || { x: 7, y: 0, theta: 0 };
+    document.getElementById('start-x').value = s.x;
+    document.getElementById('start-y').value = s.y;
+    document.getElementById('start-theta').value = s.theta.toFixed(2);
+    document.getElementById('goal-x').value = g.x;
+    document.getElementById('goal-y').value = g.y;
+    document.getElementById('goal-theta').value = g.theta.toFixed(2);
 }
 
-function runSTOMPAnimated(batchPerFrame) {
-    const t0 = performance.now();
-    const result = stompSolve(demo.start, demo.goal, 50, 40, 15);
-    const elapsed = performance.now() - t0;
-
-    let iterIdx = 0;
-    const itersPerFrame = Math.max(1, Math.floor(batchPerFrame / 5));
-
-    function frame() {
-        for (let b = 0; b < itersPerFrame && iterIdx < result.allRollouts.length; b++, iterIdx++) {
-            demo.stompRollouts = result.allRollouts[iterIdx];
-        }
-        draw();
-        setStatus(`STOMP — iteration ${iterIdx} / ${result.iterations}`);
-
-        if (iterIdx >= result.allRollouts.length) {
-            demo.stompRollouts = [];
-            demo.path = result.path;
-            draw();
-            const pathLen = result.path.length > 0 ? computePathLength(result.path) : 0;
-            setStatus(`✅ STOMP — Optimized! Length: ${pathLen.toFixed(2)} m | ${result.iterations} iters | Cost: ${result.bestCost.toFixed(1)}`);
-            updateDemoStats(result.iterations * 15, pathLen, elapsed, result.iterations);
-            demo.planning = false;
-            document.getElementById('btn-plan').textContent = '▶ Plan';
-            return;
-        }
-        demo.animHandle = requestAnimationFrame(frame);
-    }
-    demo.animHandle = requestAnimationFrame(frame);
+function readStateInputs() {
+    demo.start = {
+        x: parseFloat(document.getElementById('start-x').value) || -7,
+        y: parseFloat(document.getElementById('start-y').value) || 0,
+        theta: parseFloat(document.getElementById('start-theta').value) || 0,
+    };
+    demo.goal = {
+        x: parseFloat(document.getElementById('goal-x').value) || 7,
+        y: parseFloat(document.getElementById('goal-y').value) || 0,
+        theta: parseFloat(document.getElementById('goal-theta').value) || 0,
+    };
 }
 
-// ── Presets ──────────────────────────────────────────────────────────────────
-function presetNarrowGap() {
-    clearAll();
-    demo.start = { x: -7, y: 0 };
-    demo.goal = { x: 7, y: 0 };
-    // Vertical wall with narrow gap
-    for (let y = -6; y <= 6; y += 1.2) {
-        if (Math.abs(y) < 1.0) continue;  // gap at y≈0
-        demo.obstacles.push({ cx: 0, cy: y, r: 0.7 });
-    }
-    setStatus('Preset: Narrow Gap — Press ▶ Plan to run.');
-    draw();
-}
-
-function presetMaze() {
-    clearAll();
-    demo.start = { x: -8, y: -5 };
-    demo.goal = { x: 8, y: 5 };
-
-    // Horizontal walls
-    const walls = [
-        // Wall 1: left side
-        { x0: -6, x1: 2, y: -3, r: 0.5, gap: null },
-        // Wall 2: right side
-        { x0: -2, x1: 6, y: 0, r: 0.5, gap: null },
-        // Wall 3: mid
-        { x0: -6, x1: 3, y: 3, r: 0.5, gap: null },
-    ];
-    for (const w of walls) {
-        for (let x = w.x0; x <= w.x1; x += 1.1) {
-            demo.obstacles.push({ cx: x, cy: w.y, r: w.r });
-        }
-    }
-    // Vertical partial walls
-    for (let y = -6; y <= -3; y += 1.1) demo.obstacles.push({ cx: 4, cy: y, r: 0.5 });
-    for (let y = 0; y <= 6; y += 1.1) demo.obstacles.push({ cx: -4, cy: y, r: 0.5 });
-
-    setStatus('Preset: Maze — Press ▶ Plan to run.');
-    draw();
-}
-
-function presetClutteredField() {
-    clearAll();
-    demo.start = { x: -8, y: 0 };
-    demo.goal = { x: 8, y: 0 };
-    const positions = [
-        [-5, 2, 1.2], [-3, -3, 0.8], [-1, 1, 1.0], [1.5, -2, 1.5],
-        [3, 3, 0.9], [5, -1, 1.1], [7, 2.5, 0.7], [-6, -4, 1.0],
-        [0, 4, 0.6], [4, 0.5, 0.8], [-2, 5, 1.3], [6, -4, 0.9],
-    ];
-    for (const [cx, cy, r] of positions) {
-        demo.obstacles.push({ cx, cy, r });
-    }
-    setStatus('Preset: Cluttered Field — Press ▶ Plan to run.');
-    draw();
-}
-
-function presetUTurn() {
-    clearAll();
-    demo.start = { x: 0, y: -4 };
-    demo.goal = { x: 0, y: 4 };
-    // Two horizontal walls with gap only at the sides
-    for (let x = -8; x <= -1; x += 0.9) {
-        demo.obstacles.push({ cx: x, cy: 0, r: 0.5 });
-    }
-    for (let x = 1; x <= 8; x += 0.9) {
-        demo.obstacles.push({ cx: x, cy: 0, r: 0.5 });
-    }
-    setStatus('Preset: U-Turn — Press ▶ Plan to run.');
-    draw();
-}
-
-// ── Init ─────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// Initialisation
+// ═════════════════════════════════════════════════════════════════════════
 function initDemo() {
     demo.canvas = document.getElementById('demo-canvas');
     demo.ctx = demo.canvas.getContext('2d');
 
-    // Handle HiDPI
-    const dpr = window.devicePixelRatio || 1;
+    demo.dpr = window.devicePixelRatio || 1;
     const rect = demo.canvas.getBoundingClientRect();
-    demo.W = rect.width;
-    demo.H = rect.width * (600 / 900);
-    demo.canvas.width = demo.W * dpr;
-    demo.canvas.height = demo.H * dpr;
-    demo.canvas.style.height = demo.H + 'px';
-    demo.ctx.scale(dpr, dpr);
+    demo.canvas.width = rect.width * demo.dpr;
+    demo.canvas.height = rect.height * demo.dpr;
+
+    demo.start = { x: -7, y: 0, theta: 0 };
+    demo.goal  = { x: 7, y: 0, theta: 0 };
+    syncStateInputs();
 
     // Canvas click
     demo.canvas.addEventListener('click', (e) => {
-        if (demo.planning) return;
-        const rect = demo.canvas.getBoundingClientRect();
-        const px = (e.clientX - rect.left) * (demo.W / rect.width);
-        const py = (e.clientY - rect.top) * (demo.H / rect.height);
-        const [wx, wy] = canvasToWorld(px, py);
-
+        const r = demo.canvas.getBoundingClientRect();
+        const [wx, wy] = canvasToWorld(e.clientX - r.left, e.clientY - r.top);
         if (demo.mode === 'start') {
-            demo.start = { x: wx, y: wy };
-            demo.tree = [];
-            demo.path = [];
-            setStatus(`Start placed at (${wx.toFixed(1)}, ${wy.toFixed(1)}). Now set Goal or add obstacles.`);
+            demo.start = { x: wx, y: wy, theta: demo.start?.theta || 0 };
+            syncStateInputs();
+            setStatus('Start placed at (' + wx.toFixed(1) + ', ' + wy.toFixed(1) + ')');
         } else if (demo.mode === 'goal') {
-            demo.goal = { x: wx, y: wy };
-            demo.tree = [];
-            demo.path = [];
-            setStatus(`Goal placed at (${wx.toFixed(1)}, ${wy.toFixed(1)}). Add obstacles or press ▶ Plan.`);
+            demo.goal = { x: wx, y: wy, theta: demo.goal?.theta || 0 };
+            syncStateInputs();
+            setStatus('Goal placed at (' + wx.toFixed(1) + ', ' + wy.toFixed(1) + ')');
         } else if (demo.mode === 'obstacle') {
-            const r = parseFloat(document.getElementById('obs-radius').value);
-            demo.obstacles.push({ cx: wx, cy: wy, r });
-            demo.tree = [];
-            demo.path = [];
-            setStatus(`Obstacle added at (${wx.toFixed(1)}, ${wy.toFixed(1)}), r=${r}. Click more or ▶ Plan.`);
+            demo.obstacles.push({ cx: wx, cy: wy, r: demo.obsRadius });
+            setStatus('Obstacle added, r=' + demo.obsRadius);
         }
-        draw();
+        drawAll();
+    });
+
+    // Right-click to remove obstacle
+    demo.canvas.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const r = demo.canvas.getBoundingClientRect();
+        const [wx, wy] = canvasToWorld(e.clientX - r.left, e.clientY - r.top);
+        let minD = Infinity, minI = -1;
+        demo.obstacles.forEach((o, i) => {
+            const d = Math.hypot(o.cx - wx, o.cy - wy);
+            if (d < minD) { minD = d; minI = i; }
+        });
+        if (minI >= 0 && minD < demo.obstacles[minI].r + 0.5) {
+            demo.obstacles.splice(minI, 1);
+            drawAll(); setStatus('Obstacle removed.');
+        }
     });
 
     // Mode buttons
@@ -919,52 +537,72 @@ function initDemo() {
         });
     });
 
-    // Range sliders
-    function bindRange(id, displayId, fmt) {
-        const el = document.getElementById(id);
-        const disp = document.getElementById(displayId);
-        el.addEventListener('input', () => { disp.textContent = fmt(el.value); });
-    }
-    bindRange('obs-radius', 'radius-val', v => parseFloat(v).toFixed(1));
-    bindRange('max-iters', 'iter-val', v => v);
-    bindRange('step-size', 'step-val', v => parseFloat(v).toFixed(1));
-    bindRange('goal-bias', 'bias-val', v => parseFloat(v).toFixed(2));
-    bindRange('anim-speed', 'speed-val', v => v);
+    // Sliders
+    [['obs-radius', 'radius-val', v => { demo.obsRadius = parseFloat(v); return v; }],
+     ['rrt-iters', 'rrt-iter-val', v => { demo.rrtIterations = parseInt(v); return v; }],
+     ['ilqr-horizon', 'horizon-val', v => { demo.ilqrHorizon = parseInt(v); return v; }],
+    ].forEach(([sid, vid, fn]) => {
+        const s = document.getElementById(sid), v = document.getElementById(vid);
+        s.addEventListener('input', () => { v.textContent = fn(s.value); });
+    });
 
-    // Buttons
-    document.getElementById('btn-plan').addEventListener('click', runPlanning);
-    document.getElementById('btn-clear').addEventListener('click', clearAll);
-    document.getElementById('btn-preset-1').addEventListener('click', presetNarrowGap);
-    document.getElementById('btn-preset-2').addEventListener('click', presetMaze);
-    document.getElementById('btn-preset-3').addEventListener('click', presetClutteredField);
-    document.getElementById('btn-preset-4').addEventListener('click', presetUTurn);
+    // Selects
+    document.getElementById('model-select').addEventListener('change', e => { demo.model = e.target.value; });
+    document.getElementById('optimizer-select').addEventListener('change', e => { demo.optimizer = e.target.value; });
 
-    // Keyboard shortcut
+    // State inputs
+    ['start-x','start-y','start-theta','goal-x','goal-y','goal-theta'].forEach(id => {
+        document.getElementById(id).addEventListener('change', () => { readStateInputs(); drawAll(); });
+    });
+
+    // Plan buttons
+    document.getElementById('btn-plan').addEventListener('click', runPipeline);
+    document.getElementById('btn-rrt-only').addEventListener('click', runRRTOnly);
+    document.getElementById('btn-opt-only').addEventListener('click', runOptOnly);
+
+    // Clear
+    document.getElementById('btn-clear').addEventListener('click', () => {
+        demo.obstacles = []; demo.rrtPath = null; demo.optPath = null;
+        demo.rrtResult = null; demo.optResult = null;
+        demo.start = { x: -7, y: 0, theta: 0 }; demo.goal = { x: 7, y: 0, theta: 0 };
+        syncStateInputs(); clearOptStats();
+        ['rrt-stat-nodes','rrt-stat-length','rrt-stat-time'].forEach(id => document.getElementById(id).textContent = '-');
+        setPipelineState('');
+        Plotly.purge(document.getElementById('plot-demo-velocity'));
+        setStatus('Cleared.'); drawAll();
+    });
+
+    // Presets
+    document.getElementById('btn-preset-1').addEventListener('click', () => applyPreset('narrowPassage'));
+    document.getElementById('btn-preset-2').addEventListener('click', () => applyPreset('uTurn'));
+    document.getElementById('btn-preset-3').addEventListener('click', () => applyPreset('clutteredField'));
+    document.getElementById('btn-preset-4').addEventListener('click', () => applyPreset('parallelParking'));
+
+    // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') clearAll();
-        if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); runPlanning(); }
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+        if (e.key === '1') { demo.mode = 'start'; updMode(); }
+        if (e.key === '2') { demo.mode = 'goal'; updMode(); }
+        if (e.key === '3') { demo.mode = 'obstacle'; updMode(); }
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); runPipeline(); }
+        if (e.key === 'Escape' || e.key === 'c') { document.getElementById('btn-clear').click(); }
     });
 
-    // Resize handler
+    function updMode() {
+        document.querySelectorAll('#mode-group .btn').forEach(b =>
+            b.classList.toggle('active', b.dataset.mode === demo.mode));
+    }
+
     window.addEventListener('resize', () => {
-        const rect = demo.canvas.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
-        demo.W = rect.width;
-        demo.H = rect.width * (600 / 900);
-        demo.canvas.width = demo.W * dpr;
-        demo.canvas.height = demo.H * dpr;
-        demo.canvas.style.height = demo.H + 'px';
-        demo.ctx.setTransform(1, 0, 0, 1, 0, 0);
-        demo.ctx.scale(dpr, dpr);
-        draw();
+        const r = demo.canvas.getBoundingClientRect();
+        demo.canvas.width = r.width * demo.dpr;
+        demo.canvas.height = r.height * demo.dpr;
+        drawAll();
     });
 
-    draw();
+    drawAll();
+    initWasm();
 }
 
-// Boot when DOM ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initDemo);
-} else {
-    initDemo();
-}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initDemo);
+else initDemo();

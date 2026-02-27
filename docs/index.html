@@ -3,266 +3,48 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kinetra — Trajectory Planning Visualization</title>
+    <title>Kinetra — Trajectory Optimization Visualization</title>
+    <link rel="stylesheet" href="css/style.css">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-    <style>
-        :root {
-            --bg: #0d1117;
-            --surface: #161b22;
-            --border: #30363d;
-            --text: #c9d1d9;
-            --text-muted: #8b949e;
-            --accent: #58a6ff;
-            --green: #3fb950;
-            --red: #f85149;
-            --orange: #d29922;
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            line-height: 1.6;
-        }
-        header {
-            background: var(--surface);
-            border-bottom: 1px solid var(--border);
-            padding: 1rem 2rem;
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
-        header h1 { font-size: 1.5rem; font-weight: 600; }
-        header .badge {
-            background: var(--accent);
-            color: var(--bg);
-            padding: 0.15rem 0.6rem;
-            border-radius: 12px;
-            font-size: 0.75rem;
-            font-weight: 600;
-        }
-        nav {
-            display: flex;
-            gap: 0.5rem;
-            padding: 0.75rem 2rem;
-            background: var(--surface);
-            border-bottom: 1px solid var(--border);
-        }
-        nav button {
-            background: none;
-            border: 1px solid var(--border);
-            color: var(--text);
-            padding: 0.4rem 1rem;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.15s;
-        }
-        nav button:hover { border-color: var(--accent); color: var(--accent); }
-        nav button.active {
-            background: var(--accent);
-            color: var(--bg);
-            border-color: var(--accent);
-        }
-        main { padding: 1.5rem 2rem; max-width: 1400px; margin: 0 auto; }
-        .tab { display: none; }
-        .tab.active { display: block; }
-        .card {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1.5rem;
-            margin-bottom: 1.5rem;
-        }
-        .card h2 {
-            font-size: 1.1rem;
-            margin-bottom: 1rem;
-            color: var(--accent);
-        }
-        .grid-2 {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1.5rem;
-        }
-        @media (max-width: 900px) {
-            .grid-2 { grid-template-columns: 1fr; }
-        }
-        .stats {
-            display: flex;
-            gap: 2rem;
-            flex-wrap: wrap;
-        }
-        .stat-item { text-align: center; }
-        .stat-value { font-size: 2rem; font-weight: 700; color: var(--accent); }
-        .stat-label { font-size: 0.8rem; color: var(--text-muted); }
-        #file-input {
-            display: none;
-        }
-        .upload-area {
-            border: 2px dashed var(--border);
-            border-radius: 8px;
-            padding: 2rem;
-            text-align: center;
-            cursor: pointer;
-            transition: border-color 0.2s;
-        }
-        .upload-area:hover { border-color: var(--accent); }
-        .upload-area p { color: var(--text-muted); }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        th, td {
-            padding: 0.5rem 0.75rem;
-            text-align: left;
-            border-bottom: 1px solid var(--border);
-        }
-        th { color: var(--text-muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; }
-        .status-ok { color: var(--green); }
-        .status-fail { color: var(--red); }
-        .status-warn { color: var(--orange); }
-        footer {
-            text-align: center;
-            padding: 2rem;
-            color: var(--text-muted);
-            font-size: 0.8rem;
-        }
-        /* ── Interactive Demo ────────────────────────────────────── */
-        .demo-layout {
-            display: grid;
-            grid-template-columns: 280px 1fr;
-            gap: 1.5rem;
-        }
-        @media (max-width: 900px) {
-            .demo-layout { grid-template-columns: 1fr; }
-        }
-        .demo-sidebar .control-group {
-            margin-bottom: 1rem;
-        }
-        .demo-sidebar label {
-            display: block;
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            margin-bottom: 0.3rem;
-            text-transform: uppercase;
-            font-weight: 600;
-        }
-        .demo-sidebar select,
-        .demo-sidebar input[type="range"],
-        .demo-sidebar input[type="number"] {
-            width: 100%;
-            background: var(--bg);
-            color: var(--text);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            padding: 0.35rem 0.5rem;
-            font-size: 0.85rem;
-        }
-        .demo-sidebar input[type="range"] { padding: 0; }
-        .demo-sidebar .range-value {
-            float: right;
-            font-size: 0.8rem;
-            color: var(--accent);
-        }
-        .btn {
-            display: inline-block;
-            padding: 0.5rem 1rem;
-            border-radius: 6px;
-            border: 1px solid var(--border);
-            background: var(--surface);
-            color: var(--text);
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.15s;
-            margin-right: 0.4rem;
-            margin-bottom: 0.4rem;
-        }
-        .btn:hover { border-color: var(--accent); color: var(--accent); }
-        .btn-primary {
-            background: var(--accent);
-            color: var(--bg);
-            border-color: var(--accent);
-            font-weight: 600;
-        }
-        .btn-primary:hover { background: #79c0ff; }
-        .btn-danger {
-            border-color: var(--red);
-            color: var(--red);
-        }
-        .btn-danger:hover { background: var(--red); color: #fff; }
-        .btn-group { display: flex; gap: 0.3rem; flex-wrap: wrap; }
-        .btn-group .btn.active {
-            background: var(--accent);
-            color: var(--bg);
-            border-color: var(--accent);
-        }
-        #demo-canvas {
-            width: 100%;
-            border-radius: 6px;
-            cursor: crosshair;
-            display: block;
-        }
-        .demo-status {
-            margin-top: 0.75rem;
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            min-height: 1.2em;
-        }
-        .demo-stats-bar {
-            display: flex;
-            gap: 1.5rem;
-            flex-wrap: wrap;
-            margin-top: 0.75rem;
-        }
-        .demo-stats-bar .stat-item .stat-value {
-            font-size: 1.2rem;
-        }
-        .legend-row {
-            display: flex; gap: 1rem; flex-wrap: wrap;
-            font-size: 0.8rem; margin-top: 0.5rem;
-        }
-        .legend-row span::before {
-            content: '';
-            display: inline-block;
-            width: 10px; height: 10px;
-            border-radius: 50%;
-            margin-right: 4px;
-            vertical-align: middle;
-        }
-        .legend-start::before { background: var(--green); }
-        .legend-goal::before { background: var(--red); }
-        .legend-obstacle::before { background: #f8514980; }
-        .legend-tree::before { background: #30363d; }
-        .legend-path::before { background: var(--accent); }
-        .legend-stomp::before { background: #d2992240; }
-    </style>
 </head>
 <body>
 
 <header>
-    <h1>🔀 Kinetra</h1>
-    <span class="badge">C++20</span>
-    <span class="badge">Standalone</span>
-    <span class="badge">ARMv7 Ready</span>
+    <div class="header-left">
+        <h1>Kinetra</h1>
+        <span class="badge">C++20</span>
+        <span class="badge">WebAssembly</span>
+        <span class="badge">Trajectory Optimization</span>
+    </div>
+    <div class="header-right">
+        <span class="wasm-status loading" id="wasm-status">Loading WASM...</span>
+        <button class="theme-toggle" id="theme-toggle" title="Toggle light/dark mode">&#9790;</button>
+    </div>
 </header>
 
 <nav id="nav">
-    <button class="active" data-tab="demo">Interactive Demo</button>
+    <button class="active" data-tab="demo">Trajectory Planner</button>
     <button data-tab="trajectory">Trajectory Viewer</button>
     <button data-tab="benchmarks">Benchmarks</button>
-
 </nav>
 
 <main>
-    <!-- ── Interactive Demo ───────────────────────────────────────── -->
+    <!-- Interactive Trajectory Planning Demo -->
     <div id="demo" class="tab active">
         <div class="demo-layout">
             <div class="demo-sidebar">
                 <div class="card">
-                    <h2>🎮 Controls</h2>
+                    <h2>Planning Pipeline</h2>
+                    <div class="pipeline-indicator">
+                        <span class="pipeline-step" id="pipe-rrt">RRT*</span>
+                        <span class="pipeline-arrow">&#8594;</span>
+                        <span class="pipeline-step" id="pipe-opt">Optimize</span>
+                        <span class="pipeline-arrow">&#8594;</span>
+                        <span class="pipeline-step" id="pipe-done">Done</span>
+                    </div>
 
                     <div class="control-group">
-                        <label>Mode</label>
+                        <label>Interaction Mode</label>
                         <div class="btn-group" id="mode-group">
                             <button class="btn active" data-mode="start">Start</button>
                             <button class="btn" data-mode="goal">Goal</button>
@@ -271,89 +53,134 @@
                     </div>
 
                     <div class="control-group">
+                        <label>Start State</label>
+                        <div class="state-inputs">
+                            <div><input type="number" id="start-x" value="-7" step="0.5"><div class="sub-label">x</div></div>
+                            <div><input type="number" id="start-y" value="0" step="0.5"><div class="sub-label">y</div></div>
+                            <div><input type="number" id="start-theta" value="0" step="0.1"><div class="sub-label">&theta;</div></div>
+                        </div>
+                    </div>
+
+                    <div class="control-group">
+                        <label>Goal State</label>
+                        <div class="state-inputs">
+                            <div><input type="number" id="goal-x" value="7" step="0.5"><div class="sub-label">x</div></div>
+                            <div><input type="number" id="goal-y" value="0" step="0.5"><div class="sub-label">y</div></div>
+                            <div><input type="number" id="goal-theta" value="0" step="0.1"><div class="sub-label">&theta;</div></div>
+                        </div>
+                    </div>
+
+                    <div class="control-group">
+                        <label>Robot Model</label>
+                        <select id="model-select">
+                            <option value="DiffDriveSimple">Differential Drive (v, &omega;)</option>
+                            <option value="DiffDriveAccel">Differential Drive (a, &alpha;)</option>
+                            <option value="AckermannSimple">Ackermann Steering</option>
+                            <option value="OmniSimple">Omnidirectional</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label>Trajectory Optimizer</label>
+                        <select id="optimizer-select">
+                            <option value="iLQR">iLQR (Iterative LQR)</option>
+                            <option value="STOMP">STOMP (Stochastic)</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
                         <label>Obstacle Radius <span class="range-value" id="radius-val">0.8</span></label>
                         <input type="range" id="obs-radius" min="0.2" max="3.0" step="0.1" value="0.8">
                     </div>
 
                     <div class="control-group">
-                        <label>Algorithm</label>
-                        <select id="algo-select">
-                            <option value="rrt-star">RRT*</option>
-                            <option value="greedy-best">Greedy Best-First</option>
-                            <option value="lattice">Lattice A*</option>
-                            <option value="stomp">STOMP</option>
-                        </select>
+                        <label>RRT* Iterations <span class="range-value" id="rrt-iter-val">3000</span></label>
+                        <input type="range" id="rrt-iters" min="500" max="10000" step="500" value="3000">
                     </div>
 
                     <div class="control-group">
-                        <label>Max Iterations <span class="range-value" id="iter-val">2000</span></label>
-                        <input type="range" id="max-iters" min="200" max="10000" step="200" value="2000">
-                    </div>
-
-                    <div class="control-group">
-                        <label>Step Size <span class="range-value" id="step-val">0.5</span></label>
-                        <input type="range" id="step-size" min="0.1" max="2.0" step="0.1" value="0.5">
-                    </div>
-
-                    <div class="control-group">
-                        <label>Goal Bias <span class="range-value" id="bias-val">0.10</span></label>
-                        <input type="range" id="goal-bias" min="0.0" max="0.5" step="0.01" value="0.10">
-                    </div>
-
-                    <div class="control-group">
-                        <label>Animation Speed <span class="range-value" id="speed-val">10</span></label>
-                        <input type="range" id="anim-speed" min="1" max="100" step="1" value="10">
+                        <label>iLQR Horizon <span class="range-value" id="horizon-val">50</span></label>
+                        <input type="range" id="ilqr-horizon" min="20" max="200" step="10" value="50">
                     </div>
 
                     <div class="control-group" style="margin-top:1rem">
-                        <button class="btn btn-primary" id="btn-plan" style="width:100%">▶ Plan</button>
+                        <button class="btn btn-primary" id="btn-plan" style="width:100%" disabled>&#9654; Plan &amp; Optimize</button>
                     </div>
                     <div class="control-group">
-                        <button class="btn btn-danger" id="btn-clear" style="width:100%">✕ Clear All</button>
+                        <button class="btn" id="btn-rrt-only" style="width:100%" disabled>Path Only (RRT*)</button>
                     </div>
                     <div class="control-group">
-                        <button class="btn" id="btn-preset-1" style="width:100%">📐 Preset: Narrow Gap</button>
+                        <button class="btn" id="btn-opt-only" style="width:100%" disabled>Optimize Only (iLQR/STOMP)</button>
                     </div>
                     <div class="control-group">
-                        <button class="btn" id="btn-preset-2" style="width:100%">📐 Preset: Maze</button>
+                        <button class="btn btn-danger" id="btn-clear" style="width:100%">&#10005; Clear All</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>Presets</h2>
+                    <div class="control-group">
+                        <button class="btn" id="btn-preset-1" style="width:100%">Narrow Passage</button>
                     </div>
                     <div class="control-group">
-                        <button class="btn" id="btn-preset-3" style="width:100%">📐 Preset: Cluttered Field</button>
+                        <button class="btn" id="btn-preset-2" style="width:100%">U-Turn</button>
                     </div>
                     <div class="control-group">
-                        <button class="btn" id="btn-preset-4" style="width:100%">📐 Preset: U-Turn</button>
+                        <button class="btn" id="btn-preset-3" style="width:100%">Cluttered Field</button>
+                    </div>
+                    <div class="control-group">
+                        <button class="btn" id="btn-preset-4" style="width:100%">Parallel Parking</button>
                     </div>
                 </div>
             </div>
 
             <div>
                 <div class="card">
-                    <h2>Planning Canvas</h2>
+                    <h2>Trajectory Planning Canvas</h2>
                     <canvas id="demo-canvas" width="900" height="600"></canvas>
                     <div class="legend-row">
                         <span class="legend-start">Start</span>
                         <span class="legend-goal">Goal</span>
                         <span class="legend-obstacle">Obstacle</span>
-                        <span class="legend-tree">Search Tree</span>
-                        <span class="legend-path">Solution Path</span>
-                        <span class="legend-stomp">STOMP Rollouts</span>
+                        <span class="legend-initial">Initial Path (RRT*)</span>
+                        <span class="legend-optimized">Optimized Trajectory</span>
+                        <span class="legend-heading">Heading Arrows</span>
                     </div>
-                    <div class="demo-status" id="demo-status">Click the canvas to place Start, then Goal, then obstacles. Press ▶ Plan to run.</div>
+                    <div class="demo-status" id="demo-status">Click canvas to place Start, Goal, Obstacles. Then click Plan &amp; Optimize. C++ algorithms run in real-time via WebAssembly.</div>
                 </div>
+
                 <div class="card">
-                    <h2>Result</h2>
-                    <div class="demo-stats-bar">
-                        <div class="stat-item"><div class="stat-value" id="demo-stat-nodes">—</div><div class="stat-label">Tree Nodes</div></div>
-                        <div class="stat-item"><div class="stat-value" id="demo-stat-length">—</div><div class="stat-label">Path Length</div></div>
-                        <div class="stat-item"><div class="stat-value" id="demo-stat-time">—</div><div class="stat-label">Time (ms)</div></div>
-                        <div class="stat-item"><div class="stat-value" id="demo-stat-iters">—</div><div class="stat-label">Iterations</div></div>
+                    <h2>Results</h2>
+                    <div class="grid-2">
+                        <div>
+                            <h3 style="font-size:.85rem;color:var(--text-muted);margin-bottom:.5rem">RRT* Path</h3>
+                            <div class="demo-stats-bar">
+                                <div class="stat-item"><div class="stat-value" id="rrt-stat-nodes">-</div><div class="stat-label">Tree Nodes</div></div>
+                                <div class="stat-item"><div class="stat-value" id="rrt-stat-length">-</div><div class="stat-label">Path Length</div></div>
+                                <div class="stat-item"><div class="stat-value" id="rrt-stat-time">-</div><div class="stat-label">Time (ms)</div></div>
+                            </div>
+                        </div>
+                        <div>
+                            <h3 style="font-size:.85rem;color:var(--text-muted);margin-bottom:.5rem">Optimized Trajectory</h3>
+                            <div class="demo-stats-bar">
+                                <div class="stat-item"><div class="stat-value" id="opt-stat-cost">-</div><div class="stat-label">Cost</div></div>
+                                <div class="stat-item"><div class="stat-value" id="opt-stat-smooth">-</div><div class="stat-label">Smoothness</div></div>
+                                <div class="stat-item"><div class="stat-value" id="opt-stat-time">-</div><div class="stat-label">Time (ms)</div></div>
+                                <div class="stat-item"><div class="stat-value" id="opt-stat-curv">-</div><div class="stat-label">Max Curvature</div></div>
+                            </div>
+                        </div>
                     </div>
+                </div>
+
+                <div class="card">
+                    <h2>Velocity Profile</h2>
+                    <div id="plot-demo-velocity" style="height:250px;"></div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- ── Trajectory Viewer ──────────────────────────────────────── -->
+    <!-- Trajectory Viewer -->
     <div id="trajectory" class="tab">
         <div class="card">
             <h2>Load Planning Result</h2>
@@ -362,31 +189,23 @@
                 <input type="file" id="file-input-traj" accept=".json">
             </div>
         </div>
-
         <div class="grid-2">
-            <div class="card">
-                <h2>Path Plot</h2>
-                <div id="plot-path" style="height:500px;"></div>
-            </div>
-            <div class="card">
-                <h2>Velocity Profile</h2>
-                <div id="plot-velocity" style="height:500px;"></div>
-            </div>
+            <div class="card"><h2>Path Plot</h2><div id="plot-path" style="height:500px;"></div></div>
+            <div class="card"><h2>Velocity Profile</h2><div id="plot-velocity" style="height:500px;"></div></div>
         </div>
-
         <div class="card">
             <h2>Path Statistics</h2>
             <div class="stats" id="path-stats">
-                <div class="stat-item"><div class="stat-value" id="stat-length">—</div><div class="stat-label">Path Length</div></div>
-                <div class="stat-item"><div class="stat-value" id="stat-time">—</div><div class="stat-label">Solve Time (ms)</div></div>
-                <div class="stat-item"><div class="stat-value" id="stat-smoothness">—</div><div class="stat-label">Smoothness</div></div>
-                <div class="stat-item"><div class="stat-value" id="stat-curvature">—</div><div class="stat-label">Max Curvature</div></div>
-                <div class="stat-item"><div class="stat-value" id="stat-waypoints">—</div><div class="stat-label">Waypoints</div></div>
+                <div class="stat-item"><div class="stat-value" id="stat-length">-</div><div class="stat-label">Path Length</div></div>
+                <div class="stat-item"><div class="stat-value" id="stat-time">-</div><div class="stat-label">Solve Time (ms)</div></div>
+                <div class="stat-item"><div class="stat-value" id="stat-smoothness">-</div><div class="stat-label">Smoothness</div></div>
+                <div class="stat-item"><div class="stat-value" id="stat-curvature">-</div><div class="stat-label">Max Curvature</div></div>
+                <div class="stat-item"><div class="stat-value" id="stat-waypoints">-</div><div class="stat-label">Waypoints</div></div>
             </div>
         </div>
     </div>
 
-    <!-- ── Benchmarks ─────────────────────────────────────────────── -->
+    <!-- Benchmarks -->
     <div id="benchmarks" class="tab">
         <div class="card">
             <h2>Load Benchmark Results</h2>
@@ -395,10 +214,7 @@
                 <input type="file" id="file-input-bench" accept=".json">
             </div>
         </div>
-        <div class="card">
-            <h2>Performance Over Time</h2>
-            <div id="plot-bench-time" style="height:400px;"></div>
-        </div>
+        <div class="card"><h2>Performance</h2><div id="plot-bench-time" style="height:400px;"></div></div>
         <div class="card">
             <h2>Benchmark Table</h2>
             <table id="bench-table">
@@ -407,20 +223,16 @@
             </table>
         </div>
     </div>
-
-
 </main>
 
-<footer>
-    Kinetra — World-class trajectory planning for robotics.
-    <br>Built with C++20 · Eigen · Plotly.js
-</footer>
+<footer>Kinetra — World-class trajectory optimization for robotics. C++ algorithms compiled to WebAssembly.<br>Built with C++20 &middot; Eigen &middot; Emscripten &middot; Plotly.js</footer>
 
+<script src="kinetra_wasm.js"></script>
 <script src="js/interactive_demo.js"></script>
 <script src="js/trajectory_viewer.js"></script>
 <script src="js/benchmark_dashboard.js"></script>
 <script>
-// ── Tab navigation ───────────────────────────────────────────────
+// Tab navigation
 document.querySelectorAll('nav button').forEach(btn => {
     btn.addEventListener('click', () => {
         document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
@@ -430,37 +242,39 @@ document.querySelectorAll('nav button').forEach(btn => {
     });
 });
 
-// ── File upload helpers ──────────────────────────────────────────
+// Theme toggle
+const themeBtn = document.getElementById('theme-toggle');
+function setTheme(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    themeBtn.textContent = t === 'light' ? '\u2600' : '\u263E';
+    localStorage.setItem('kinetra-theme', t);
+    if (window.updatePlotlyTheme) window.updatePlotlyTheme();
+}
+themeBtn.addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+    setTheme(cur === 'dark' ? 'light' : 'dark');
+});
+const saved = localStorage.getItem('kinetra-theme');
+if (saved) setTheme(saved);
+
+// File upload helpers
 function setupUpload(areaId, inputId, callback) {
     const area = document.getElementById(areaId);
     const input = document.getElementById(inputId);
     area.addEventListener('click', () => input.click());
-    area.addEventListener('dragover', e => { e.preventDefault(); area.style.borderColor = '#58a6ff'; });
+    area.addEventListener('dragover', e => { e.preventDefault(); area.style.borderColor = 'var(--accent)'; });
     area.addEventListener('dragleave', () => { area.style.borderColor = ''; });
     area.addEventListener('drop', e => {
-        e.preventDefault();
-        area.style.borderColor = '';
-        const file = e.dataTransfer.files[0];
-        if (file) readFile(file, callback);
+        e.preventDefault(); area.style.borderColor = '';
+        if (e.dataTransfer.files[0]) readUploadedFile(e.dataTransfer.files[0], callback);
     });
-    input.addEventListener('change', () => {
-        if (input.files[0]) readFile(input.files[0], callback);
-    });
+    input.addEventListener('change', () => { if (input.files[0]) readUploadedFile(input.files[0], callback); });
 }
-
-function readFile(file, callback) {
-    const reader = new FileReader();
-    reader.onload = e => {
-        try {
-            const data = JSON.parse(e.target.result);
-            callback(data);
-        } catch (err) {
-            alert('Invalid JSON: ' + err.message);
-        }
-    };
-    reader.readAsText(file);
+function readUploadedFile(file, cb) {
+    const r = new FileReader();
+    r.onload = e => { try { cb(JSON.parse(e.target.result)); } catch(err) { alert('Invalid JSON: ' + err.message); } };
+    r.readAsText(file);
 }
-
 setupUpload('upload-trajectory', 'file-input-traj', loadTrajectory);
 setupUpload('upload-bench', 'file-input-bench', loadBenchmarks);
 </script>
