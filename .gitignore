@@ -1,0 +1,22 @@
+# Build
+build*/
+cmake-build-*/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Agent runtime
+agent/logs/
+agent/reports/
+
+# Python
+__pycache__/
+*.pyc
+.venv/

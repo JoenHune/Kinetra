@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kinetra — Trajectory Planning Visualization</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --green: #3fb950;
+            --red: #f85149;
+            --orange: #d29922;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+        header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        header h1 { font-size: 1.5rem; font-weight: 600; }
+        header .badge {
+            background: var(--accent);
+            color: var(--bg);
+            padding: 0.15rem 0.6rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        nav {
+            display: flex;
+            gap: 0.5rem;
+            padding: 0.75rem 2rem;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+        }
+        nav button {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 0.4rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.15s;
+        }
+        nav button:hover { border-color: var(--accent); color: var(--accent); }
+        nav button.active {
+            background: var(--accent);
+            color: var(--bg);
+            border-color: var(--accent);
+        }
+        main { padding: 1.5rem 2rem; max-width: 1400px; margin: 0 auto; }
+        .tab { display: none; }
+        .tab.active { display: block; }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .card h2 {
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+            color: var(--accent);
+        }
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+        @media (max-width: 900px) {
+            .grid-2 { grid-template-columns: 1fr; }
+        }
+        .stats {
+            display: flex;
+            gap: 2rem;
+            flex-wrap: wrap;
+        }
+        .stat-item { text-align: center; }
+        .stat-value { font-size: 2rem; font-weight: 700; color: var(--accent); }
+        .stat-label { font-size: 0.8rem; color: var(--text-muted); }
+        #file-input {
+            display: none;
+        }
+        .upload-area {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .upload-area:hover { border-color: var(--accent); }
+        .upload-area p { color: var(--text-muted); }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 0.5rem 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th { color: var(--text-muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; }
+        .status-ok { color: var(--green); }
+        .status-fail { color: var(--red); }
+        .status-warn { color: var(--orange); }
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>🔀 Kinetra</h1>
+    <span class="badge">C++20</span>
+    <span class="badge">Standalone</span>
+    <span class="badge">ARMv7 Ready</span>
+</header>
+
+<nav id="nav">
+    <button class="active" data-tab="trajectory">Trajectory Viewer</button>
+    <button data-tab="benchmarks">Benchmarks</button>
+    <button data-tab="agent">Agent Log</button>
+</nav>
+
+<main>
+    <!-- ── Trajectory Viewer ──────────────────────────────────────── -->
+    <div id="trajectory" class="tab active">
+        <div class="card">
+            <h2>Load Planning Result</h2>
+            <div class="upload-area" id="upload-trajectory">
+                <p>Drop a Kinetra JSON result file here, or click to browse</p>
+                <input type="file" id="file-input-traj" accept=".json">
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="card">
+                <h2>Path Plot</h2>
+                <div id="plot-path" style="height:500px;"></div>
+            </div>
+            <div class="card">
+                <h2>Velocity Profile</h2>
+                <div id="plot-velocity" style="height:500px;"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Path Statistics</h2>
+            <div class="stats" id="path-stats">
+                <div class="stat-item"><div class="stat-value" id="stat-length">—</div><div class="stat-label">Path Length</div></div>
+                <div class="stat-item"><div class="stat-value" id="stat-time">—</div><div class="stat-label">Solve Time (ms)</div></div>
+                <div class="stat-item"><div class="stat-value" id="stat-smoothness">—</div><div class="stat-label">Smoothness</div></div>
+                <div class="stat-item"><div class="stat-value" id="stat-curvature">—</div><div class="stat-label">Max Curvature</div></div>
+                <div class="stat-item"><div class="stat-value" id="stat-waypoints">—</div><div class="stat-label">Waypoints</div></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Benchmarks ─────────────────────────────────────────────── -->
+    <div id="benchmarks" class="tab">
+        <div class="card">
+            <h2>Load Benchmark Results</h2>
+            <div class="upload-area" id="upload-bench">
+                <p>Drop a Google Benchmark JSON output file here</p>
+                <input type="file" id="file-input-bench" accept=".json">
+            </div>
+        </div>
+        <div class="card">
+            <h2>Performance Over Time</h2>
+            <div id="plot-bench-time" style="height:400px;"></div>
+        </div>
+        <div class="card">
+            <h2>Benchmark Table</h2>
+            <table id="bench-table">
+                <thead><tr><th>Name</th><th>Time (ns)</th><th>CPU (ns)</th><th>Iterations</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ── Agent Log ──────────────────────────────────────────────── -->
+    <div id="agent" class="tab">
+        <div class="card">
+            <h2>Load Agent Report</h2>
+            <div class="upload-area" id="upload-agent">
+                <p>Drop an agent report.json file here</p>
+                <input type="file" id="file-input-agent" accept=".json">
+            </div>
+        </div>
+        <div class="card">
+            <h2>Iteration Timeline</h2>
+            <div id="plot-agent" style="height:400px;"></div>
+        </div>
+        <div class="card">
+            <h2>Iteration Details</h2>
+            <table id="agent-table">
+                <thead><tr><th>Iter</th><th>Focus</th><th>Build</th><th>Test</th><th>Bench</th><th>Time (s)</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+</main>
+
+<footer>
+    Kinetra — World-class trajectory planning for robotics.
+    <br>Built with C++20 · Eigen · Plotly.js
+</footer>
+
+<script src="js/trajectory_viewer.js"></script>
+<script src="js/benchmark_dashboard.js"></script>
+<script src="js/agent_dashboard.js"></script>
+<script>
+// ── Tab navigation ───────────────────────────────────────────────
+document.querySelectorAll('nav button').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById(btn.dataset.tab).classList.add('active');
+    });
+});
+
+// ── File upload helpers ──────────────────────────────────────────
+function setupUpload(areaId, inputId, callback) {
+    const area = document.getElementById(areaId);
+    const input = document.getElementById(inputId);
+    area.addEventListener('click', () => input.click());
+    area.addEventListener('dragover', e => { e.preventDefault(); area.style.borderColor = '#58a6ff'; });
+    area.addEventListener('dragleave', () => { area.style.borderColor = ''; });
+    area.addEventListener('drop', e => {
+        e.preventDefault();
+        area.style.borderColor = '';
+        const file = e.dataTransfer.files[0];
+        if (file) readFile(file, callback);
+    });
+    input.addEventListener('change', () => {
+        if (input.files[0]) readFile(input.files[0], callback);
+    });
+}
+
+function readFile(file, callback) {
+    const reader = new FileReader();
+    reader.onload = e => {
+        try {
+            const data = JSON.parse(e.target.result);
+            callback(data);
+        } catch (err) {
+            alert('Invalid JSON: ' + err.message);
+        }
+    };
+    reader.readAsText(file);
+}
+
+setupUpload('upload-trajectory', 'file-input-traj', loadTrajectory);
+setupUpload('upload-bench', 'file-input-bench', loadBenchmarks);
+setupUpload('upload-agent', 'file-input-agent', loadAgentReport);
+</script>
+
+</body>
+</html>

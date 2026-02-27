@@ -1,0 +1,51 @@
+# Kinetra Agent Configuration
+# ─────────────────────────────
+
+project:
+  root: ".."                          # Relative to agent/ dir
+  build_dir: "../build"
+  cmake_preset: "default"
+  cmake_options:
+    - "-DCMAKE_BUILD_TYPE=Release"
+    - "-DKINETRA_BUILD_TESTS=ON"
+    - "-DKINETRA_BUILD_BENCHMARKS=ON"
+
+agent:
+  max_iterations: 20
+  auto_commit: false                  # Git commit after each green iteration
+  log_dir: "logs"
+  report_dir: "reports"
+
+build:
+  parallel_jobs: 0                    # 0 = auto-detect
+  timeout_seconds: 120
+  sanitizers: false                   # Enable ASan/TSan during test phase
+
+test:
+  timeout_seconds: 300
+  retry_on_failure: 1
+  coverage: false                     # Generate lcov coverage (slower)
+
+benchmark:
+  timeout_seconds: 600
+  repetitions: 3
+  regression_threshold_pct: 5.0       # Flag if >5% slower than baseline
+  baseline_file: "logs/benchmark_baseline.json"
+
+research:
+  enabled: true
+  max_queries_per_iteration: 3
+  sources:
+    - "arxiv"
+    - "github"
+    - "scholar"
+  cache_dir: "logs/research_cache"
+
+reflect:
+  knowledge_base: "logs/knowledge.jsonl"   # Append-only learnings
+  focus_areas:
+    - "trajectory_optimization"
+    - "sampling_based_planning"
+    - "collision_checking"
+    - "embedded_performance"
+    - "numerical_stability"
