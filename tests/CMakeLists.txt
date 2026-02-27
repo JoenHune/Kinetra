@@ -11,6 +11,12 @@ set(KINETRA_TEST_SOURCES
     unit/test_qp_solver.cpp
     unit/test_rrt_star.cpp
     unit/test_ilqr.cpp
+    unit/test_stomp.cpp
+    unit/test_lattice.cpp
+    unit/test_nlp.cpp
+    unit/test_json_export.cpp
+    unit/test_polygon_obstacles.cpp
+    unit/test_scenario_loader.cpp
 )
 
 add_executable(kinetra_tests ${KINETRA_TEST_SOURCES})

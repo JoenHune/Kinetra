@@ -75,6 +75,9 @@ add_library(kinetra STATIC
     src/collision/occupancy_grid.cpp
     src/collision/polygon_obstacles.cpp
 
+    # Optimization
+    src/optimization/nlp_problem.cpp
+
     # Solvers
     src/solvers/qp_admm.cpp
     src/solvers/lqr.cpp
@@ -83,6 +86,7 @@ add_library(kinetra STATIC
     src/planners/rrt_star.cpp
     src/planners/stomp.cpp
     src/planners/ilqr.cpp
+    src/planners/lattice.cpp
 
     # IO
     src/io/json_export.cpp

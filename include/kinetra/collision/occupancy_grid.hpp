@@ -38,6 +38,9 @@ public:
     /// Mark a rectangular region as occupied
     void addRectObstacle(const Vec2& min_corner, const Vec2& max_corner);
 
+    /// Mark a convex polygon region as occupied (rasterized via point-in-polygon)
+    void addPolygonObstacle(const std::vector<Vec2>& vertices);
+
     /// Clear all obstacles
     void clear();
 
@@ -57,6 +60,14 @@ public:
     /// Recompute the signed distance field (Euclidean distance transform).
     /// Called lazily when signedDistance() is queried after modifications.
     void recomputeDistanceField();
+
+    // ── Polygon collision (GJK) ──────────────────────────────────────────────
+
+    /// GJK intersection test between two convex polygons.
+    /// Returns true if the polygons do NOT overlap (collision-free).
+    [[nodiscard]] static bool isPolygonCollisionFree(
+        const std::vector<Vec2>& robot_vertices,
+        const std::vector<Vec2>& obstacle_vertices);
 
     // ── Coordinate conversion ────────────────────────────────────────────────
 
