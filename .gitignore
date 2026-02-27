@@ -15,6 +15,7 @@ Thumbs.db
 # Agent runtime
 agent/logs/
 agent/reports/
+agent/config.local.yaml
 
 # Python
 __pycache__/

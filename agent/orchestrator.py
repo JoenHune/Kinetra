@@ -80,8 +80,7 @@ class Orchestrator:
     """Main agent loop — now with LLM-driven code generation."""
 
     def __init__(self, config_path: str):
-        with open(config_path) as f:
-            self.cfg = yaml.safe_load(f)
+        self.cfg = self._load_config(config_path)
 
         self.agent_dir = Path(__file__).resolve().parent
         self.project_root = (self.agent_dir / self.cfg["project"]["root"]).resolve()
@@ -151,6 +150,38 @@ class Orchestrator:
 
         # History
         self.history: list[IterationRecord] = []
+
+    # ── Config loading ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _deep_merge(base: dict, override: dict) -> dict:
+        """Recursively merge *override* into *base* (override wins)."""
+        merged = dict(base)
+        for k, v in override.items():
+            if k in merged and isinstance(merged[k], dict) and isinstance(v, dict):
+                merged[k] = Orchestrator._deep_merge(merged[k], v)
+            else:
+                merged[k] = v
+        return merged
+
+    @staticmethod
+    def _load_config(config_path: str) -> dict:
+        """Load config.yaml, then deep-merge config.local.yaml on top.
+
+        config.local.yaml is git-ignored and intended for secrets
+        (api_key, api_base, etc.) that should never be pushed.
+        """
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f) or {}
+
+        local_path = Path(config_path).with_name("config.local.yaml")
+        if local_path.exists():
+            with open(local_path) as f:
+                local_cfg = yaml.safe_load(f) or {}
+            cfg = Orchestrator._deep_merge(cfg, local_cfg)
+            log.debug("Merged local overrides from %s", local_path)
+
+        return cfg
 
     # ── Phase runners ─────────────────────────────────────────────────────
 

@@ -21,18 +21,22 @@ agent:
 # Supported providers: openai, anthropic, deepseek, ollama, or any custom
 # endpoint that speaks the OpenAI chat-completions protocol.
 #
+# WARNING: DO NOT put api_key / api_base here — they will be pushed to remote!
+#   Create  config.local.yaml  (git-ignored) to store secrets:
+#     cp config.local.yaml.example config.local.yaml
+#
 # API key resolution order:
-#   1. llm.api_key below
-#   2. Environment variable: OPENAI_API_KEY / ANTHROPIC_API_KEY / DEEPSEEK_API_KEY
-#   3. LLM_API_KEY (generic fallback)
+#   1. config.local.yaml  -> llm.api_key  (recommended)
+#   2. config.yaml        -> llm.api_key  (NOT recommended, will be pushed)
+#   3. Environment variable: OPENAI_API_KEY / ANTHROPIC_API_KEY / DEEPSEEK_API_KEY
+#   4. LLM_API_KEY (generic fallback)
 #
 # To run without LLM (CI-only mode): set enabled: false or use --no-llm flag
 llm:
   enabled: true
   provider: "deepseek"                # openai | anthropic | deepseek | ollama | custom
   model: "deepseek-chat"              # Model name
-  api_base: ""                        # Override base URL (leave empty for provider default)
-  api_key: ""                         # Set here or via env var
+  # api_base and api_key: set in config.local.yaml or env vars
   temperature: 0.3                    # Lower = more deterministic
   max_tokens: 8192                    # Max response tokens
   timeout: 120                        # Request timeout (seconds)
