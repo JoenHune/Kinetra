@@ -30,23 +30,13 @@ else()
     message(STATUS "Kinetra: Using double precision")
 endif()
 
-# ─── Compiler Warnings ───────────────────────────────────────────────────────
-add_compile_options(
+# ─── Compiler Warnings (target-specific, so FetchContent deps are unaffected) ─
+set(KINETRA_WARNINGS
     -Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor
     -Wold-style-cast -Wcast-align -Wunused -Woverloaded-virtual
     -Wconversion -Wsign-conversion -Wnull-dereference
     -Wformat=2 -Wimplicit-fallthrough
 )
-
-if(KINETRA_ENABLE_ASAN)
-    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
-    add_link_options(-fsanitize=address)
-endif()
-
-if(KINETRA_ENABLE_TSAN)
-    add_compile_options(-fsanitize=thread)
-    add_link_options(-fsanitize=thread)
-endif()
 
 # ─── Third Party Dependencies ────────────────────────────────────────────────
 include(FetchContent)
@@ -103,6 +93,20 @@ target_include_directories(kinetra
 target_link_libraries(kinetra PUBLIC Eigen3::Eigen)
 
 target_compile_features(kinetra PUBLIC cxx_std_20)
+
+# Apply warnings only to our code
+target_compile_options(kinetra PRIVATE ${KINETRA_WARNINGS})
+
+# Sanitizers (applied globally only when explicitly requested)
+if(KINETRA_ENABLE_ASAN)
+    target_compile_options(kinetra PUBLIC -fsanitize=address -fno-omit-frame-pointer)
+    target_link_options(kinetra PUBLIC -fsanitize=address)
+endif()
+
+if(KINETRA_ENABLE_TSAN)
+    target_compile_options(kinetra PUBLIC -fsanitize=thread)
+    target_link_options(kinetra PUBLIC -fsanitize=thread)
+endif()
 
 set_target_properties(kinetra PROPERTIES
     POSITION_INDEPENDENT_CODE ON

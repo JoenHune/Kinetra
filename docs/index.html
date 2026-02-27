@@ -127,6 +127,113 @@
             color: var(--text-muted);
             font-size: 0.8rem;
         }
+        /* ── Interactive Demo ────────────────────────────────────── */
+        .demo-layout {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 1.5rem;
+        }
+        @media (max-width: 900px) {
+            .demo-layout { grid-template-columns: 1fr; }
+        }
+        .demo-sidebar .control-group {
+            margin-bottom: 1rem;
+        }
+        .demo-sidebar label {
+            display: block;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 0.3rem;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+        .demo-sidebar select,
+        .demo-sidebar input[type="range"],
+        .demo-sidebar input[type="number"] {
+            width: 100%;
+            background: var(--bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 0.35rem 0.5rem;
+            font-size: 0.85rem;
+        }
+        .demo-sidebar input[type="range"] { padding: 0; }
+        .demo-sidebar .range-value {
+            float: right;
+            font-size: 0.8rem;
+            color: var(--accent);
+        }
+        .btn {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.15s;
+            margin-right: 0.4rem;
+            margin-bottom: 0.4rem;
+        }
+        .btn:hover { border-color: var(--accent); color: var(--accent); }
+        .btn-primary {
+            background: var(--accent);
+            color: var(--bg);
+            border-color: var(--accent);
+            font-weight: 600;
+        }
+        .btn-primary:hover { background: #79c0ff; }
+        .btn-danger {
+            border-color: var(--red);
+            color: var(--red);
+        }
+        .btn-danger:hover { background: var(--red); color: #fff; }
+        .btn-group { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+        .btn-group .btn.active {
+            background: var(--accent);
+            color: var(--bg);
+            border-color: var(--accent);
+        }
+        #demo-canvas {
+            width: 100%;
+            border-radius: 6px;
+            cursor: crosshair;
+            display: block;
+        }
+        .demo-status {
+            margin-top: 0.75rem;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            min-height: 1.2em;
+        }
+        .demo-stats-bar {
+            display: flex;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+            margin-top: 0.75rem;
+        }
+        .demo-stats-bar .stat-item .stat-value {
+            font-size: 1.2rem;
+        }
+        .legend-row {
+            display: flex; gap: 1rem; flex-wrap: wrap;
+            font-size: 0.8rem; margin-top: 0.5rem;
+        }
+        .legend-row span::before {
+            content: '';
+            display: inline-block;
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            margin-right: 4px;
+            vertical-align: middle;
+        }
+        .legend-start::before { background: var(--green); }
+        .legend-goal::before { background: var(--red); }
+        .legend-obstacle::before { background: #f8514980; }
+        .legend-tree::before { background: #30363d; }
+        .legend-path::before { background: var(--accent); }
     </style>
 </head>
 <body>
@@ -139,14 +246,105 @@
 </header>
 
 <nav id="nav">
-    <button class="active" data-tab="trajectory">Trajectory Viewer</button>
+    <button class="active" data-tab="demo">Interactive Demo</button>
+    <button data-tab="trajectory">Trajectory Viewer</button>
     <button data-tab="benchmarks">Benchmarks</button>
     <button data-tab="agent">Agent Log</button>
 </nav>
 
 <main>
+    <!-- ── Interactive Demo ───────────────────────────────────────── -->
+    <div id="demo" class="tab active">
+        <div class="demo-layout">
+            <div class="demo-sidebar">
+                <div class="card">
+                    <h2>🎮 Controls</h2>
+
+                    <div class="control-group">
+                        <label>Mode</label>
+                        <div class="btn-group" id="mode-group">
+                            <button class="btn active" data-mode="start">Start</button>
+                            <button class="btn" data-mode="goal">Goal</button>
+                            <button class="btn" data-mode="obstacle">Obstacle</button>
+                        </div>
+                    </div>
+
+                    <div class="control-group">
+                        <label>Obstacle Radius <span class="range-value" id="radius-val">0.8</span></label>
+                        <input type="range" id="obs-radius" min="0.2" max="3.0" step="0.1" value="0.8">
+                    </div>
+
+                    <div class="control-group">
+                        <label>Algorithm</label>
+                        <select id="algo-select">
+                            <option value="rrt-star">RRT*</option>
+                            <option value="greedy-best">Greedy Best-First</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label>Max Iterations <span class="range-value" id="iter-val">2000</span></label>
+                        <input type="range" id="max-iters" min="200" max="10000" step="200" value="2000">
+                    </div>
+
+                    <div class="control-group">
+                        <label>Step Size <span class="range-value" id="step-val">0.5</span></label>
+                        <input type="range" id="step-size" min="0.1" max="2.0" step="0.1" value="0.5">
+                    </div>
+
+                    <div class="control-group">
+                        <label>Goal Bias <span class="range-value" id="bias-val">0.10</span></label>
+                        <input type="range" id="goal-bias" min="0.0" max="0.5" step="0.01" value="0.10">
+                    </div>
+
+                    <div class="control-group">
+                        <label>Animation Speed <span class="range-value" id="speed-val">10</span></label>
+                        <input type="range" id="anim-speed" min="1" max="100" step="1" value="10">
+                    </div>
+
+                    <div class="control-group" style="margin-top:1rem">
+                        <button class="btn btn-primary" id="btn-plan" style="width:100%">▶ Plan</button>
+                    </div>
+                    <div class="control-group">
+                        <button class="btn btn-danger" id="btn-clear" style="width:100%">✕ Clear All</button>
+                    </div>
+                    <div class="control-group">
+                        <button class="btn" id="btn-preset-1" style="width:100%">📐 Preset: Narrow Gap</button>
+                    </div>
+                    <div class="control-group">
+                        <button class="btn" id="btn-preset-2" style="width:100%">📐 Preset: Maze</button>
+                    </div>
+                </div>
+            </div>
+
+            <div>
+                <div class="card">
+                    <h2>Planning Canvas</h2>
+                    <canvas id="demo-canvas" width="900" height="600"></canvas>
+                    <div class="legend-row">
+                        <span class="legend-start">Start</span>
+                        <span class="legend-goal">Goal</span>
+                        <span class="legend-obstacle">Obstacle</span>
+                        <span class="legend-tree">Search Tree</span>
+                        <span class="legend-path">Solution Path</span>
+                    </div>
+                    <div class="demo-status" id="demo-status">Click the canvas to place Start, then Goal, then obstacles. Press ▶ Plan to run.</div>
+                </div>
+                <div class="card">
+                    <h2>Result</h2>
+                    <div class="demo-stats-bar">
+                        <div class="stat-item"><div class="stat-value" id="demo-stat-nodes">—</div><div class="stat-label">Tree Nodes</div></div>
+                        <div class="stat-item"><div class="stat-value" id="demo-stat-length">—</div><div class="stat-label">Path Length</div></div>
+                        <div class="stat-item"><div class="stat-value" id="demo-stat-time">—</div><div class="stat-label">Time (ms)</div></div>
+                        <div class="stat-item"><div class="stat-value" id="demo-stat-iters">—</div><div class="stat-label">Iterations</div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ── Trajectory Viewer ──────────────────────────────────────── -->
-    <div id="trajectory" class="tab active">
+    <div id="trajectory" class="tab">
         <div class="card">
             <h2>Load Planning Result</h2>
             <div class="upload-area" id="upload-trajectory">
@@ -228,6 +426,7 @@
     <br>Built with C++20 · Eigen · Plotly.js
 </footer>
 
+<script src="js/interactive_demo.js"></script>
 <script src="js/trajectory_viewer.js"></script>
 <script src="js/benchmark_dashboard.js"></script>
 <script src="js/agent_dashboard.js"></script>
