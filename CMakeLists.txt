@@ -48,7 +48,12 @@ FetchContent_Declare(
     GIT_TAG        3.4.0
     GIT_SHALLOW    TRUE
 )
+# Prevent Eigen from registering its ~1000 tests and build targets
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
+set(EIGEN_BUILD_PKGCONFIG OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(eigen)
+set(BUILD_TESTING ON CACHE BOOL "" FORCE)
 
 # ─── Kinetra Core Library ────────────────────────────────────────────────────
 add_library(kinetra STATIC

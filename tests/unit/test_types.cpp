@@ -15,8 +15,9 @@ TEST(Types, NormalizeAngle) {
 TEST(Types, AngularDistance) {
     EXPECT_NEAR(angularDistance(0, constants::kPi), -constants::kPi, 1e-10);
     EXPECT_NEAR(angularDistance(0, constants::kHalfPi), constants::kHalfPi, 1e-10);
+    // normalizeAngle(π) maps to -π by the [-π, π) convention
     EXPECT_NEAR(angularDistance(-constants::kHalfPi, constants::kHalfPi),
-                constants::kPi, 1e-10);
+                -constants::kPi, 1e-10);
 }
 
 TEST(Types, Lerp) {

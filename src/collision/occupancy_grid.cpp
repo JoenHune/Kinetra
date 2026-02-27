@@ -121,11 +121,34 @@ void OccupancyGrid2D::recomputeDistanceField() {
         }
     }
 
-    // Convert to signed: negative inside obstacles
+    // Compute interior distance field (distance from occupied cells to nearest free)
+    std::vector<Scalar> interior_field(static_cast<std::size_t>(width_ * height_));
+    for (int i = 0; i < width_ * height_; ++i) {
+        interior_field[static_cast<std::size_t>(i)] =
+            grid_[static_cast<std::size_t>(i)] ? kLargeVal : 0;
+    }
+    // Forward pass (interior)
+    for (int y = 0; y < height_; ++y) {
+        for (int x = 0; x < width_; ++x) {
+            auto& d = interior_field[static_cast<std::size_t>(idx(x, y))];
+            if (x > 0) d = std::min(d, interior_field[static_cast<std::size_t>(idx(x-1, y))] + resolution_);
+            if (y > 0) d = std::min(d, interior_field[static_cast<std::size_t>(idx(x, y-1))] + resolution_);
+        }
+    }
+    // Backward pass (interior)
+    for (int y = height_ - 1; y >= 0; --y) {
+        for (int x = width_ - 1; x >= 0; --x) {
+            auto& d = interior_field[static_cast<std::size_t>(idx(x, y))];
+            if (x + 1 < width_) d = std::min(d, interior_field[static_cast<std::size_t>(idx(x+1, y))] + resolution_);
+            if (y + 1 < height_) d = std::min(d, interior_field[static_cast<std::size_t>(idx(x, y+1))] + resolution_);
+        }
+    }
+
+    // Combine: free cells get exterior distance, occupied cells get negative interior distance
     for (int i = 0; i < width_ * height_; ++i) {
         if (grid_[static_cast<std::size_t>(i)]) {
             distance_field_[static_cast<std::size_t>(i)] =
-                -distance_field_[static_cast<std::size_t>(i)];
+                -interior_field[static_cast<std::size_t>(i)];
         }
     }
 

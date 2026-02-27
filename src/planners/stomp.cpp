@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "kinetra/planners/stomp.hpp"
 
+#include <Eigen/Cholesky>
 #include <chrono>
 #include <cmath>
 #include <random>
@@ -18,17 +19,19 @@ PlanningResult STOMP::solve(const PlanningProblem& problem) {
     // Initialize straight-line trajectory (N x 3 matrix: [x, y, theta])
     MatX trajectory = initializeTrajectory(problem.start, problem.goal);
 
-    // Smoothness cost matrix (finite-difference)
+    // Smoothness inverse R^{-1} and its Cholesky for correlated noise generation.
+    // Sampling ε = σ * L * z (z ~ N(0,I)) produces smooth noise with
+    // covariance σ² R^{-1}, matching the STOMP prior distribution.
     MatX R_inv = smoothnessMatrix(N);
+    Eigen::LLT<MatX> llt(R_inv);
+    MatX L = llt.matrixL();  // R^{-1} = L L^T
 
     // Default cost function: obstacle distance
     auto cost_fn = cost_fn_ ? cost_fn_ :
         [](const MatX& traj) -> VecX { return VecX::Zero(traj.rows()); };
 
-    Scalar best_cost = constants::kInfinity;
+    Scalar best_cost = cost_fn(trajectory).sum();
     MatX best_trajectory = trajectory;
-
-    std::mt19937 gen(std::random_device{}());
 
     for (int iter = 0; iter < options_.maxIterations; ++iter) {
         auto elapsed = std::chrono::duration<double, std::milli>(
@@ -44,32 +47,38 @@ PlanningResult STOMP::solve(const PlanningProblem& problem) {
 
         for (int k = 0; k < K; ++k) {
             auto ki = static_cast<std::size_t>(k);
-            // Generate noise (exclude start and goal)
-            noises[ki] = generateNoise(N, 3);
-            noises[ki].row(0).setZero();
-            noises[ki].row(N - 1).setZero();
+            if (k == 0) {
+                // Include current trajectory (zero noise) as a baseline rollout.
+                // This anchors the weighted average, preventing drift when
+                // state costs are flat (e.g. empty environments).
+                noises[ki] = MatX::Zero(N, 3);
+            } else {
+                // Generate smooth (correlated) noise via Cholesky of R^{-1}
+                MatX z = generateNoise(N, 3);
+                noises[ki] = options_.noiseSigma * (L * z);
+                noises[ki].row(0).setZero();
+                noises[ki].row(N - 1).setZero();
+            }
 
             // Apply noise to get rollout
             MatX rollout = trajectory + noises[ki];
 
-            // Evaluate cost
+            // Evaluate cost: state cost + control regularization
             VecX state_costs = cost_fn(rollout);
             Scalar control_cost = options_.controlCostWeight *
-                (noises[ki].transpose() * R_inv * noises[ki]).trace();
+                noises[ki].squaredNorm();
             rollout_costs[k] = state_costs.sum() + control_cost;
         }
 
         // Compute probability weights
         VecX weights = computeWeights(rollout_costs);
 
-        // Compute weighted combination of noises
+        // Compute weighted combination of noises.
+        // No additional R^{-1} smoothing needed — noise is already smooth.
         MatX delta = MatX::Zero(N, 3);
         for (int k = 0; k < K; ++k) {
             delta += weights[k] * noises[static_cast<std::size_t>(k)];
         }
-
-        // Smooth the update
-        delta = R_inv * delta;
 
         // Update trajectory
         trajectory += delta;
@@ -86,8 +95,9 @@ PlanningResult STOMP::solve(const PlanningProblem& problem) {
             best_trajectory = trajectory;
         }
 
-        // Convergence check
-        if (delta.norm() < options_.dt * static_cast<Scalar>(0.01)) {
+        // Convergence: average per-element squared change is small
+        if (delta.squaredNorm() / static_cast<Scalar>(N * 3)
+            < static_cast<Scalar>(1e-6)) {
             break;
         }
     }
