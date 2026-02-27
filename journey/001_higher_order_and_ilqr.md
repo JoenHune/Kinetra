@@ -1,6 +1,6 @@
 # 001 — 高阶模型与 iLQR 求解器
 
-**日期**: 2025-07-24  
+**日期**: 2026-02-28  
 **里程碑**: Jerk/Snap 阶机器人模型 + 完整 iLQR 轨迹优化
 
 ---
@@ -150,8 +150,6 @@ Trajectory solve(const PlanningProblem& problem);
 
 - [ ] 添加 Lattice Planner 作为第四种规划器
 - [ ] 性能 profiling：在 ARMv7 QEMU 上测量实际执行时间
-- [ ] 添加 MPC (Model Predictive Control) 封装
-- [ ] 轨迹平滑后处理（B-spline 拟合）
 
 ---
 
