@@ -249,7 +249,7 @@
     <button class="active" data-tab="demo">Interactive Demo</button>
     <button data-tab="trajectory">Trajectory Viewer</button>
     <button data-tab="benchmarks">Benchmarks</button>
-    <button data-tab="agent">Agent Log</button>
+
 </nav>
 
 <main>
@@ -398,27 +398,7 @@
         </div>
     </div>
 
-    <!-- ── Agent Log ──────────────────────────────────────────────── -->
-    <div id="agent" class="tab">
-        <div class="card">
-            <h2>Load Agent Report</h2>
-            <div class="upload-area" id="upload-agent">
-                <p>Drop an agent report.json file here</p>
-                <input type="file" id="file-input-agent" accept=".json">
-            </div>
-        </div>
-        <div class="card">
-            <h2>Iteration Timeline</h2>
-            <div id="plot-agent" style="height:400px;"></div>
-        </div>
-        <div class="card">
-            <h2>Iteration Details</h2>
-            <table id="agent-table">
-                <thead><tr><th>Iter</th><th>Focus</th><th>Build</th><th>Test</th><th>Bench</th><th>Time (s)</th></tr></thead>
-                <tbody></tbody>
-            </table>
-        </div>
-    </div>
+
 </main>
 
 <footer>
@@ -429,7 +409,6 @@
 <script src="js/interactive_demo.js"></script>
 <script src="js/trajectory_viewer.js"></script>
 <script src="js/benchmark_dashboard.js"></script>
-<script src="js/agent_dashboard.js"></script>
 <script>
 // ── Tab navigation ───────────────────────────────────────────────
 document.querySelectorAll('nav button').forEach(btn => {
@@ -474,7 +453,6 @@ function readFile(file, callback) {
 
 setupUpload('upload-trajectory', 'file-input-traj', loadTrajectory);
 setupUpload('upload-bench', 'file-input-bench', loadBenchmarks);
-setupUpload('upload-agent', 'file-input-agent', loadAgentReport);
 </script>
 
 </body>

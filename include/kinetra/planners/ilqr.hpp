@@ -99,3 +99,6 @@ private:
 };
 
 }  // namespace kinetra::planners
+
+// Template implementation
+#include "kinetra/planners/ilqr_impl.hpp"

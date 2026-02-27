@@ -162,4 +162,95 @@ static_assert(LinearizableModel<AckermannSimple>);
 static_assert(RobotModel<AckermannAccel>);
 static_assert(LinearizableModel<AckermannAccel>);
 
+// ─── Jerk-level Ackermann (with steering acceleration) ──────────────────────
+// State: (x, y, theta, v, phi, a, dphi) | Control: (jerk, ddphi)
+// Enables smooth acceleration + steering rate profiles.
+struct AckermannJerk {
+    using StateType   = Eigen::Matrix<Scalar, 7, 1>;
+    using ControlType = Eigen::Matrix<Scalar, 2, 1>;
+
+    static constexpr std::size_t kStateDim   = 7;
+    static constexpr std::size_t kControlDim = 2;
+
+    Scalar wheelbase{2.5};
+    Scalar max_v{5.0};
+    Scalar max_a{3.0};
+    Scalar max_steering_angle{0.5};
+    Scalar max_steering_rate{0.8};
+    Scalar max_jerk{8.0};               // max linear jerk (m/s³)
+    Scalar max_steering_accel{2.0};      // max steering angular acceleration (rad/s²)
+
+    [[nodiscard]] StateType dynamics(const StateType& x, const ControlType& u,
+                                      Scalar dt) const noexcept {
+        Scalar v    = x[3];
+        Scalar phi  = x[4];
+        Scalar a    = x[5];
+        Scalar dphi = x[6];
+        Scalar j    = clamp(u[0], -max_jerk, max_jerk);
+        Scalar ddp  = clamp(u[1], -max_steering_accel, max_steering_accel);
+
+        StateType x_next;
+        x_next[0] = x[0] + v * std::cos(x[2]) * dt;
+        x_next[1] = x[1] + v * std::sin(x[2]) * dt;
+        x_next[2] = normalizeAngle(x[2] + (v / wheelbase) * std::tan(phi) * dt);
+        x_next[3] = clamp(v + a * dt, -max_v, max_v);
+        x_next[4] = clamp(phi + dphi * dt, -max_steering_angle, max_steering_angle);
+        x_next[5] = clamp(a + j * dt, -max_a, max_a);
+        x_next[6] = clamp(dphi + ddp * dt, -max_steering_rate, max_steering_rate);
+        return x_next;
+    }
+
+    [[nodiscard]] StateType stateLowerBound() const noexcept {
+        StateType lb;
+        lb << -constants::kInfinity, -constants::kInfinity, -constants::kPi,
+              -max_v, -max_steering_angle, -max_a, -max_steering_rate;
+        return lb;
+    }
+    [[nodiscard]] StateType stateUpperBound() const noexcept {
+        StateType ub;
+        ub << constants::kInfinity, constants::kInfinity, constants::kPi,
+              max_v, max_steering_angle, max_a, max_steering_rate;
+        return ub;
+    }
+    [[nodiscard]] ControlType controlLowerBound() const noexcept {
+        return ControlType{-max_jerk, -max_steering_accel};
+    }
+    [[nodiscard]] ControlType controlUpperBound() const noexcept {
+        return ControlType{max_jerk, max_steering_accel};
+    }
+
+    [[nodiscard]] Eigen::Matrix<Scalar, 7, 7> jacobianState(
+        const StateType& x, [[maybe_unused]] const ControlType& u,
+        Scalar dt) const noexcept {
+        Scalar v   = x[3];
+        Scalar phi = x[4];
+        Scalar tan_phi = std::tan(phi);
+        Scalar sec_phi = static_cast<Scalar>(1.0) / std::cos(phi);
+
+        Eigen::Matrix<Scalar, 7, 7> A = Eigen::Matrix<Scalar, 7, 7>::Identity();
+        A(0, 2) = -v * std::sin(x[2]) * dt;
+        A(0, 3) = std::cos(x[2]) * dt;
+        A(1, 2) = v * std::cos(x[2]) * dt;
+        A(1, 3) = std::sin(x[2]) * dt;
+        A(2, 3) = tan_phi / wheelbase * dt;
+        A(2, 4) = v / wheelbase * sec_phi * sec_phi * dt;
+        A(3, 5) = dt;
+        A(4, 6) = dt;
+        return A;
+    }
+
+    [[nodiscard]] Eigen::Matrix<Scalar, 7, 2> jacobianControl(
+        [[maybe_unused]] const StateType& x,
+        [[maybe_unused]] const ControlType& u,
+        Scalar dt) const noexcept {
+        Eigen::Matrix<Scalar, 7, 2> B = Eigen::Matrix<Scalar, 7, 2>::Zero();
+        B(5, 0) = dt;
+        B(6, 1) = dt;
+        return B;
+    }
+};
+
+static_assert(RobotModel<AckermannJerk>);
+static_assert(LinearizableModel<AckermannJerk>);
+
 }  // namespace kinetra

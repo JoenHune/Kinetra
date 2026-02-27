@@ -81,8 +81,7 @@ include/kinetra/
   - 占据栅格 + 有符号距离场（双向距离变换）
 - **测试**: 8 个单元测试 + 1 个集成测试（GoogleTest）
 - **基准测试**: 3 个 benchmark suite（Google Benchmark）
-- **Agent 循环**: Python 编排器 + 5 个工具模块 + 7 个 prompt 模板
-- **可视化**: GitHub Pages 暗色主题仪表盘（Plotly.js）
+- **可视化**: GitHub Pages 暗色主题仪表盘（Plotly.js）+ 交互式 Canvas 规划 Demo
 - **CI/CD**: GitHub Actions（原生 + 消毒器 + ARMv7 交叉编译 + Pages 部署）
 - **交叉编译**: ARMv7 toolchain（NEON + hard-float）
 
@@ -97,11 +96,10 @@ include/kinetra/
 
 ### 下一步
 
-- [ ] 编译通过：修复所有编译错误，确保 `cmake --build` 成功
-- [ ] 测试全绿：`ctest` 所有测试通过
-- [ ] 跑通 Agent 循环：`python orchestrator.py --iterations 1`
-- [ ] 增加 jerk/snap 阶的机器人模型
-- [ ] 实现 iLQR 求解器的完整版本
+- [x] 编译通过：修复所有编译错误，确保 `cmake --build` 成功
+- [x] 测试全绿：`ctest` 所有 54 个测试通过
+- [x] 增加 jerk/snap 阶的机器人模型 → [001](001_higher_order_and_ilqr.md)
+- [x] 实现 iLQR 求解器的完整版本 → [001](001_higher_order_and_ilqr.md)
 - [ ] 添加 Lattice Planner 作为第四种规划器
 - [ ] 性能 profiling：在 ARMv7 QEMU 上测量实际执行时间
 

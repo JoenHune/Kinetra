@@ -10,6 +10,7 @@ set(KINETRA_TEST_SOURCES
     unit/test_collision.cpp
     unit/test_qp_solver.cpp
     unit/test_rrt_star.cpp
+    unit/test_ilqr.cpp
 )
 
 add_executable(kinetra_tests ${KINETRA_TEST_SOURCES})

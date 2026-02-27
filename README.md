@@ -22,11 +22,10 @@
 | **Standalone** | Zero external solver dependencies. Only Eigen (header-only, auto-fetched). |
 | **C++20** | Concepts for zero-cost polymorphism, `constexpr` math, `std::span`. |
 | **Embeddable** | Deploys to ARMv7 (NEON-optimized). Switchable `float`/`double` scalar. |
-| **Multi-Model** | Differential drive, Ackermann, omnidirectional — velocity & accel orders. |
+| **Multi-Model** | Differential drive, Ackermann, omnidirectional — velocity through snap orders. |
 | **Composable NLP** | ifopt-inspired: build problems from VariableSets + Constraints + Costs. |
-| **Test-Driven** | 50+ unit tests, integration tests, Google Benchmark suites. |
-| **AI Agent Loop** | Automated research → design → implement → test → benchmark → reflect. |
-| **Visualization** | GitHub Pages dashboard with Plotly.js (trajectory, benchmarks, agent log). |
+| **Test-Driven** | 69 unit/integration tests, Google Benchmark suites. |
+| **Visualization** | GitHub Pages dashboard with Plotly.js (trajectory viewer, benchmarks). |
 
 ## Quick Start
 
@@ -63,7 +62,6 @@ kinetra/
 ├── tests/              # GoogleTest suite
 ├── benchmarks/         # Google Benchmark suite
 ├── examples/           # Working examples
-├── agent/              # AI development agent (Python)
 ├── docs/               # GitHub Pages (Plotly.js dashboard)
 └── cmake/toolchains/   # ARMv7 cross-compilation
 ```
@@ -79,8 +77,11 @@ All models satisfy the `RobotModel` and `LinearizableModel` concepts, providing:
 |-------|-------|---------|-------|
 | `DiffDriveSimple` | $(x, y, \theta)$ | $(v, \omega)$ | Velocity |
 | `DiffDriveAccel` | $(x, y, \theta, v, \omega)$ | $(a, \alpha)$ | Acceleration |
+| `DiffDriveJerk` | $(x, y, \theta, v, \omega, a, \alpha)$ | $(j, j_\alpha)$ | Jerk |
+| `DiffDriveSnap` | $(x, y, \theta, v, \omega, a, \alpha, j, j_\alpha)$ | $(s, s_\alpha)$ | Snap |
 | `AckermannSimple` | $(x, y, \theta)$ | $(v, \delta)$ | Velocity |
 | `AckermannAccel` | $(x, y, \theta, v, \delta)$ | $(a, \dot\delta)$ | Acceleration |
+| `AckermannJerk` | $(x, y, \theta, v, \delta, a, \dot\delta)$ | $(j, \ddot\delta)$ | Jerk |
 | `OmniSimple` | $(x, y, \theta)$ | $(v_x, v_y, \omega)$ | Velocity |
 
 ## Planners
@@ -163,33 +164,13 @@ cmake --build build-arm --parallel
 
 The `KINETRA_USE_FLOAT` flag switches the global `Scalar` type from `double` to `float`, enabling NEON SIMD on ARM Cortex-A cores.
 
-## AI Development Agent
-
-The `agent/` directory contains a Python orchestrator that automates the development loop:
-
-```
-Research → Design → Implement → Test → Benchmark → Reflect → repeat
-```
-
-```bash
-cd agent
-pip install -r requirements.txt
-python orchestrator.py --iterations 10
-```
-
-Each iteration:
-1. Searches arXiv & GitHub for relevant algorithms
-2. Builds the project and runs tests
-3. Runs benchmarks and detects regressions (>5% threshold)
-4. Logs learnings to an append-only knowledge base
-
 ## Visualization
 
 The `docs/` directory serves as a GitHub Pages site with three views:
 
+- **Interactive Demo** — Canvas-based RRT* / Greedy Best-First planning with real-time animation
 - **Trajectory Viewer** — Drop a Kinetra JSON result file to see the path, obstacles, and velocity profile
 - **Benchmark Dashboard** — Visualize Google Benchmark JSON output
-- **Agent Log** — Track iteration history with phase timing breakdown
 
 ## Build Options
 
@@ -209,5 +190,5 @@ BSD 3-Clause. See [LICENSE](LICENSE) for details.
 ---
 
 <div align="center">
-<sub>Built with 🤖 by the Kinetra Development Agent</sub>
+<sub>Built with C++20 · Eigen · Zero Dependencies</sub>
 </div>

@@ -112,3 +112,113 @@ TEST(OmniSimple, StrafeMotion) {
     EXPECT_NEAR(x_next[1], 1.0, 1e-6);   // moved in +y (world frame)
     EXPECT_NEAR(x_next[2], 0.0, 1e-6);
 }
+
+// ─── Differential Drive Jerk ─────────────────────────────────────────────────
+TEST(DiffDriveJerk, ConceptSatisfied) {
+    static_assert(RobotModel<DiffDriveJerk>);
+    static_assert(LinearizableModel<DiffDriveJerk>);
+    SUCCEED();
+}
+
+TEST(DiffDriveJerk, DynamicsPropagation) {
+    DiffDriveJerk model;
+    model.max_v = 2.0;  // raise limit so clamp doesn't interfere
+    DiffDriveJerk::StateType x;
+    // (x, y, theta, v, omega, a, alpha)
+    x << 0, 0, 0, 1.0, 0, 0.5, 0;
+    DiffDriveJerk::ControlType u;
+    u << 0, 0;  // zero jerk
+
+    auto x_next = model.dynamics(x, u, 0.1);
+    EXPECT_NEAR(x_next[0], 0.1, 1e-6);   // moved with v=1
+    EXPECT_NEAR(x_next[1], 0.0, 1e-6);
+    EXPECT_NEAR(x_next[3], 1.05, 1e-6);  // v += a*dt = 1.0 + 0.5*0.1
+    EXPECT_NEAR(x_next[5], 0.5, 1e-6);   // a unchanged (jerk=0)
+}
+
+TEST(DiffDriveJerk, JacobianFiniteDiff) {
+    DiffDriveJerk model;
+    DiffDriveJerk::StateType x;
+    x << 1, 2, 0.3, 0.5, 0.1, 0.2, 0.1;
+    DiffDriveJerk::ControlType u;
+    u << 0.5, 0.3;
+    Scalar dt = 0.05;
+
+    auto A = model.jacobianState(x, u, dt);
+    Scalar eps = 1e-5;
+    for (int i = 0; i < 7; ++i) {
+        DiffDriveJerk::StateType xp = x, xm = x;
+        xp[i] += eps;
+        xm[i] -= eps;
+        auto fp = model.dynamics(xp, u, dt);
+        auto fm = model.dynamics(xm, u, dt);
+        for (int j = 0; j < 7; ++j) {
+            Scalar numerical = (fp[j] - fm[j]) / (2 * eps);
+            EXPECT_NEAR(A(j, i), numerical, 1e-3)
+                << "A(" << j << "," << i << ")";
+        }
+    }
+}
+
+// ─── Differential Drive Snap ─────────────────────────────────────────────────
+TEST(DiffDriveSnap, ConceptSatisfied) {
+    static_assert(RobotModel<DiffDriveSnap>);
+    static_assert(LinearizableModel<DiffDriveSnap>);
+    SUCCEED();
+}
+
+TEST(DiffDriveSnap, ChainedIntegration) {
+    DiffDriveSnap model;
+    DiffDriveSnap::StateType x = DiffDriveSnap::StateType::Zero();
+    x[7] = 1.0;  // jerk = 1 m/s³
+    DiffDriveSnap::ControlType u = DiffDriveSnap::ControlType::Zero();
+
+    // After 0.1s with jerk=1: a += jerk*dt = 0.1, v += a_old*dt = 0
+    auto x1 = model.dynamics(x, u, 0.1);
+    EXPECT_NEAR(x1[5], 0.1, 1e-6);  // a = 0 + 1*0.1
+    EXPECT_NEAR(x1[3], 0.0, 1e-6);  // v = 0 + 0*0.1 = 0 (a was 0)
+}
+
+// ─── Ackermann Jerk ──────────────────────────────────────────────────────────
+TEST(AckermannJerk, ConceptSatisfied) {
+    static_assert(RobotModel<AckermannJerk>);
+    static_assert(LinearizableModel<AckermannJerk>);
+    SUCCEED();
+}
+
+TEST(AckermannJerk, StraightLine) {
+    AckermannJerk model;
+    AckermannJerk::StateType x;
+    // (x, y, theta, v, phi, a, dphi)
+    x << 0, 0, 0, 1.0, 0, 0, 0;
+    AckermannJerk::ControlType u;
+    u << 0, 0;
+
+    auto x_next = model.dynamics(x, u, 1.0);
+    EXPECT_NEAR(x_next[0], 1.0, 1e-6);
+    EXPECT_NEAR(x_next[1], 0.0, 1e-6);
+}
+
+TEST(AckermannJerk, JacobianFiniteDiff) {
+    AckermannJerk model;
+    AckermannJerk::StateType x;
+    x << 1, 2, 0.2, 1.0, 0.1, 0.5, 0.1;
+    AckermannJerk::ControlType u;
+    u << 0.3, 0.1;
+    Scalar dt = 0.05;
+
+    auto A = model.jacobianState(x, u, dt);
+    Scalar eps = 1e-5;
+    for (int i = 0; i < 7; ++i) {
+        AckermannJerk::StateType xp = x, xm = x;
+        xp[i] += eps;
+        xm[i] -= eps;
+        auto fp = model.dynamics(xp, u, dt);
+        auto fm = model.dynamics(xm, u, dt);
+        for (int j = 0; j < 7; ++j) {
+            Scalar numerical = (fp[j] - fm[j]) / (2 * eps);
+            EXPECT_NEAR(A(j, i), numerical, 1e-3)
+                << "A(" << j << "," << i << ")";
+        }
+    }
+}
