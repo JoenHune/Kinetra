@@ -16,6 +16,27 @@ agent:
   log_dir: "logs"
   report_dir: "reports"
 
+# ── LLM Configuration ────────────────────────────────────────────────────────
+# The agent uses an OpenAI-compatible API for Design and Implement phases.
+# Supported providers: openai, anthropic, deepseek, ollama, or any custom
+# endpoint that speaks the OpenAI chat-completions protocol.
+#
+# API key resolution order:
+#   1. llm.api_key below
+#   2. Environment variable: OPENAI_API_KEY / ANTHROPIC_API_KEY / DEEPSEEK_API_KEY
+#   3. LLM_API_KEY (generic fallback)
+#
+# To run without LLM (CI-only mode): set enabled: false or use --no-llm flag
+llm:
+  enabled: true
+  provider: "deepseek"                # openai | anthropic | deepseek | ollama | custom
+  model: "deepseek-chat"              # Model name
+  api_base: ""                        # Override base URL (leave empty for provider default)
+  api_key: ""                         # Set here or via env var
+  temperature: 0.3                    # Lower = more deterministic
+  max_tokens: 8192                    # Max response tokens
+  timeout: 120                        # Request timeout (seconds)
+
 build:
   parallel_jobs: 0                    # 0 = auto-detect
   timeout_seconds: 120
