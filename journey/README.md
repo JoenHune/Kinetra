@@ -14,6 +14,7 @@ Each entry corresponds to a milestone or key architectural decision.
 | 2 | 2026-02-28 | 消灭 Stubs + Lattice Planner + Profiling | [002_stubs_lattice_profiling.md](002_stubs_lattice_profiling.md) |
 | 3 | 2026-02-28 | SQP 求解器 + Canvas 增强 + 规划场景 | [003_sqp_canvas_scenarios.md](003_sqp_canvas_scenarios.md) |
 | 4 | 2026-02-28 | SE(2)-MPCC：基于进度变量的路径跟踪轨迹优化 | [004_se2_mpcc.md](004_se2_mpcc.md) |
+| 5 | 2026-02-28 | MPCC 性能优化 + 代码清理 + 交互增强 | [005_mpcc_perf_and_polish.md](005_mpcc_perf_and_polish.md) |
 
 ---
 

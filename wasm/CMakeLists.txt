@@ -42,7 +42,7 @@ set(KINETRA_WASM_SOURCES
     ${KINETRA_ROOT}/src/spaces/se2.cpp
     ${KINETRA_ROOT}/src/spaces/dubins.cpp
     ${KINETRA_ROOT}/src/spaces/real_vector.cpp
-    # Robot models (stubs — header-only)
+    # Robot models (header-only)
     ${KINETRA_ROOT}/src/robots/differential_drive.cpp
     ${KINETRA_ROOT}/src/robots/ackermann.cpp
     ${KINETRA_ROOT}/src/robots/omnidirectional.cpp

@@ -288,3 +288,24 @@ TEST(SQPSolver, FeasibilityFromInfeasibleStart) {
     EXPECT_LE(final_norm, 1.0 + 0.05);
     EXPECT_LT(result.constraintViolation, 1e-3);
 }
+
+TEST(SQPSolver, TotalQPIterationsPopulated) {
+    // Ensure totalQPIterations is reported by the solver
+    NLPProblem problem;
+    auto vars = std::make_shared<TestVars2D>(-10.0, 10.0);
+    VecX x0(2); x0 << 3, 3;
+    vars->setValues(x0);
+
+    MatX Q = MatX::Identity(2, 2);
+    VecX c = VecX::Zero(2);
+    auto cost = std::make_shared<QuadraticCost>(Q, c);
+    cost->linkVariables({vars});
+
+    problem.addVariableSet(vars);
+    problem.addCostSet(cost);
+
+    SQPSolver solver;
+    auto result = solver.solve(problem);
+    EXPECT_GT(result.totalQPIterations, 0);
+    EXPECT_LT(result.cost, 1e-3);
+}

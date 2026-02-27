@@ -82,6 +82,7 @@ struct MPCCResult {
 
     // SQP solver info
     int sqpIterations{0};
+    int totalQPIterations{0};  // Sum of ADMM iterations across all QP solves
     Scalar finalCost{0};
     Scalar constraintViolation{0};
 };

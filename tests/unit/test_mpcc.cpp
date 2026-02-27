@@ -373,3 +373,22 @@ TEST(MPCC_NLP, ProgressConstraintMonotonicity) {
         EXPECT_LE(g[k], ub[k] + 1e-10);
     }
 }
+
+TEST(MPCC_DiffDrive, TotalQPIterationsReported) {
+    DiffDriveSimple model;
+    auto path = makeStraightPath(3.0, 15);
+
+    MPCCOptions opts;
+    opts.horizon = 20;
+    opts.dt = 0.1;
+    opts.sqpSettings.maxIterations = 15;
+    opts.sqpSettings.verbose = false;
+
+    MPCC<DiffDriveSimple> mpcc(model, path, opts);
+    auto problem = makeSimpleProblem();
+    problem.goal = {3, 0, 0, 0};
+
+    auto result = mpcc.solve(problem);
+    EXPECT_GT(result.totalQPIterations, 0);
+    EXPECT_GT(result.planningResult.trajectory.size(), 0u);
+}

@@ -77,6 +77,7 @@ private:
 
     // Problem data
     MatX Q_, A_;
+    MatX AT_;  // A transposed — cached to avoid recomputation
     VecX c_, lb_, ub_;
     int n_{0};  // number of variables
     int m_{0};  // number of constraints
@@ -85,13 +86,16 @@ private:
     VecX x_, z_, y_;        // primal, auxiliary, dual
     VecX z_prev_;
 
-    // Factorized KKT matrix (stored for efficient re-solves)
-    MatX kkt_factor_;  // Will use Eigen::LDLT in implementation
+    // Cached matrices for efficient ADMM
+    MatX ATA_;          // A' * A — precomputed once in setup()
+    MatX kkt_factor_;   // Q + sigma*I + rho*ATA — for LDLT
+    Scalar cached_rho_{0}; // rho used in last factorization
     bool is_setup_{false};
 
     // Internal helpers
+    void factorizeKKT();
     void projectOntoBox(VecX& z, const VecX& lb, const VecX& ub) const;
-    void updateRho(Scalar primal_res, Scalar dual_res);
+    bool updateRho(Scalar primal_res, Scalar dual_res);
 };
 
 }  // namespace kinetra::solvers

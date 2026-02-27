@@ -16,46 +16,6 @@ namespace kinetra::planners {
 // ═════════════════════════════════════════════════════════════════════════════
 // NLP Component: State Variables   x_0 ... x_N (flattened)
 // ═════════════════════════════════════════════════════════════════════════════
-namespace mpcc_detail {
-
-template <int NX>
-class StateVariables : public optimization::VariableSet {
-public:
-    StateVariables(int N, const auto& model)
-        : VariableSet((N + 1) * NX, "states"), N_(N), model_(model) {}
-
-    VecX lowerBounds() const override {
-        VecX lb = VecX::Constant(size(), -constants::kInfinity);
-        auto slo = model_.stateLowerBound();
-        for (int k = 0; k <= N_; ++k)
-            for (int i = 0; i < NX; ++i)
-                lb[k * NX + i] = slo[i];
-        return lb;
-    }
-    VecX upperBounds() const override {
-        VecX ub = VecX::Constant(size(), constants::kInfinity);
-        auto shi = model_.stateUpperBound();
-        for (int k = 0; k <= N_; ++k)
-            for (int i = 0; i < NX; ++i)
-                ub[k * NX + i] = shi[i];
-        return ub;
-    }
-
-private:
-    int N_;
-    std::decay_t<decltype(std::declval<typename std::remove_reference_t<decltype(std::declval<StateVariables>().model_)>>())> model_;
-
-    // Workaround: store a copy of the model for bounds
-    template <typename M2> friend class StateVariables;
-public:
-    // Re-declare with simpler type
-    StateVariables(int N, auto model, int /*tag*/)
-        : VariableSet((N + 1) * NX, "states"), N_(N) {}
-};
-
-}  // namespace mpcc_detail
-
-// Use simpler concrete class to avoid template deduction issues
 namespace mpcc_nlp {
 
 class MPCCStateVars : public optimization::VariableSet {
@@ -708,6 +668,7 @@ MPCCResult MPCC<Model>::extractResult(
 
     // MPCC-specific metadata
     result.sqpIterations = sqpResult.iterations;
+    result.totalQPIterations = sqpResult.totalQPIterations;
     result.finalCost = sqpResult.cost;
     result.constraintViolation = sqpResult.constraintViolation;
 

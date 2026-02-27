@@ -19,6 +19,7 @@ set(KINETRA_TEST_SOURCES
     unit/test_sqp.cpp
     unit/test_reference_path.cpp
     unit/test_mpcc.cpp
+    unit/test_mpcc_perf.cpp
 )
 
 add_executable(kinetra_tests ${KINETRA_TEST_SOURCES})

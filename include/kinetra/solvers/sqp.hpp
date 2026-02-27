@@ -51,6 +51,7 @@ struct SQPResult {
     Scalar cost{0};           // Final objective
     Scalar constraintViolation{0};
     int iterations{0};
+    int totalQPIterations{0}; // Sum of ADMM iterations across all QP solves
     bool converged{false};
     double solveTimeMs{0};
     std::string exitMessage;
@@ -75,8 +76,12 @@ public:
     [[nodiscard]] const SQPSettings& settings() const noexcept { return settings_; }
     SQPSettings& settings() noexcept { return settings_; }
 
+    /// Total QP ADMM iterations across all SQP iterations (for profiling)
+    [[nodiscard]] int totalQPIterations() const noexcept { return total_qp_iters_; }
+
 private:
     SQPSettings settings_;
+    int total_qp_iters_{0};
 
     /// Compute L1 constraint violation: ‖max(0, cl - g, g - cu)‖₁
     [[nodiscard]] static Scalar constraintViolation(

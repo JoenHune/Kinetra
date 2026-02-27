@@ -46,6 +46,7 @@ void SQPSolver::bfgsUpdate(MatX& H, const VecX& s, const VecX& y) {
 SQPResult SQPSolver::solve(optimization::NLPProblem& problem) {
     SQPResult result;
     auto t0 = Clock::now();
+    total_qp_iters_ = 0;
 
     const int n = problem.numVariables();
     const int m = problem.numConstraints();
@@ -64,11 +65,17 @@ SQPResult SQPSolver::solve(optimization::NLPProblem& problem) {
     // BFGS Hessian approximation — start with identity
     MatX H = MatX::Identity(n, n);
 
+    // Cache constraint bounds (they never change during the solve)
+    VecX cl = (m > 0) ? problem.constraintLowerBounds() : VecX{};
+    VecX cu = (m > 0) ? problem.constraintUpperBounds() : VecX{};
+
     // Penalty parameter for L1 merit
     Scalar mu = settings_.initialMeritPenalty;
 
     // Previous Lagrangian gradient (for BFGS y-vector)
     VecX prev_grad_L = VecX::Zero(n);
+    VecX prev_d = VecX::Zero(n);  // Previous QP step direction for warm-starting
+    VecX prev_y_qp = VecX::Zero(m + n);  // Previous QP dual for warm-starting
     bool has_prev_grad = false;
 
     for (int iter = 0; iter < settings_.maxIterations; ++iter) {
@@ -87,8 +94,6 @@ SQPResult SQPSolver::solve(optimization::NLPProblem& problem) {
         VecX grad = problem.costGradient();
 
         VecX g  = (m > 0) ? problem.constraintValues() : VecX{};
-        VecX cl = (m > 0) ? problem.constraintLowerBounds() : VecX{};
-        VecX cu = (m > 0) ? problem.constraintUpperBounds() : VecX{};
         MatX J  = (m > 0) ? problem.constraintJacobian() : MatX{};
 
         Scalar viol = (m > 0) ? constraintViolation(g, cl, cu) : 0;
@@ -123,17 +128,25 @@ SQPResult SQPSolver::solve(optimization::NLPProblem& problem) {
 
         // Solve QP
         QPSolverADMM qp;
-        qp.settings().maxIterations = 2000;
-        qp.settings().absTolerance = static_cast<Scalar>(1e-6);
-        qp.settings().relTolerance = static_cast<Scalar>(1e-6);
+        qp.settings().maxIterations = 300;
+        qp.settings().absTolerance = static_cast<Scalar>(1e-4);
+        qp.settings().relTolerance = static_cast<Scalar>(1e-4);
 
         if (!qp.setup(H_reg, grad, A_qp, lb_qp, ub_qp)) {
             result.exitMessage = "QP sub-problem setup failed";
             break;
         }
 
+        // Warm-start QP with previous step direction if available
+        if (has_prev_grad) {
+            qp.warmStart(prev_d, prev_y_qp);
+        }
+
         QPResult qp_result = qp.solve();
         VecX d = qp_result.x;
+        prev_d = d;
+        prev_y_qp = qp_result.y;
+        total_qp_iters_ += qp_result.iterations;
 
         if (d.squaredNorm() < static_cast<Scalar>(1e-20)) {
             // Zero step → converged (or stuck)
@@ -218,8 +231,8 @@ SQPResult SQPSolver::solve(optimization::NLPProblem& problem) {
         x = x_trial;
 
         // ── Convergence check ────────────────────────────────────────────────
+        // problem already has x_trial set from line search/BFGS gradient eval
         Scalar step_norm = s.norm();
-        problem.setVariableValues(x);
         Scalar new_viol = (m > 0) ?
             constraintViolation(problem.constraintValues(), cl, cu) : 0;
         Scalar new_cost = problem.totalCost();
@@ -237,8 +250,8 @@ SQPResult SQPSolver::solve(optimization::NLPProblem& problem) {
         }
 
         // Also check if gradient is near zero and feasible (stationarity)
-        VecX grad_check = problem.costGradient();
-        if (grad_check.norm() < settings_.tolerance &&
+        // Reuse grad_new from BFGS update (already computed above)
+        if (grad_new.norm() < settings_.tolerance &&
             new_viol < settings_.constraintTolerance)
         {
             result.converged = true;
@@ -256,6 +269,7 @@ SQPResult SQPSolver::solve(optimization::NLPProblem& problem) {
     // ── Finalize ────────────────────────────────────────────────────────────
     problem.setVariableValues(x);
     result.x = x;
+    result.totalQPIterations = total_qp_iters_;
     result.solveTimeMs = std::chrono::duration<double, std::milli>(
         Clock::now() - t0).count();
 

@@ -180,11 +180,22 @@ function drawEndpoint(ctx, point, color, label) {
     ctx.beginPath(); ctx.arc(px, py, 8, 0, Math.PI * 2); ctx.fill();
     if (point.theta !== undefined) {
         const len = worldScale(0.6);
+        const th = point.theta;
         ctx.strokeStyle = color;
         ctx.lineWidth = 2.5;
         ctx.beginPath();
         ctx.moveTo(px, py);
-        ctx.lineTo(px + len * Math.cos(-point.theta), py + len * Math.sin(-point.theta));
+        const ex = px + len * Math.cos(-th);
+        const ey = py + len * Math.sin(-th);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        // Arrowhead for heading direction
+        const hl = len * 0.35;
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - hl * Math.cos(-th - 0.4), ey - hl * Math.sin(-th - 0.4));
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - hl * Math.cos(-th + 0.4), ey - hl * Math.sin(-th + 0.4));
         ctx.stroke();
     }
     ctx.fillStyle = getColor('canvas-bg');
@@ -614,23 +625,106 @@ function initDemo() {
     demo.goal  = { x: 7, y: 0, theta: 0 };
     syncStateInputs();
 
-    // Canvas click
+    // ─── Canvas interaction: drag-to-set-heading for start/goal ──────────
+    // mousedown  → record click position (and tentative placement)
+    // mousemove  → if dragging in start/goal mode, update heading from drag vector
+    // mouseup    → confirm placement; if no drag occurred, heading = previous value
+    // click      → used for obstacle mode only (no drag needed)
+    let dragState = null;  // { mode:'start'|'goal', x, y, startCx, startCy }
+
+    demo.canvas.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;  // left button only
+        if (demo.mode !== 'start' && demo.mode !== 'goal') return;
+
+        const r = demo.canvas.getBoundingClientRect();
+        const cx = e.clientX - r.left;
+        const cy = e.clientY - r.top;
+        const [wx, wy] = canvasToWorld(cx, cy);
+
+        dragState = { mode: demo.mode, x: wx, y: wy, startCx: cx, startCy: cy, dragged: false };
+
+        // Tentatively place the endpoint (theta unchanged until drag)
+        const prevTheta = (demo.mode === 'start') ? (demo.start?.theta || 0) : (demo.goal?.theta || 0);
+        if (demo.mode === 'start') {
+            demo.start = { x: wx, y: wy, theta: prevTheta };
+        } else {
+            demo.goal = { x: wx, y: wy, theta: prevTheta };
+        }
+        syncStateInputs();
+        drawAll();
+    });
+
+    demo.canvas.addEventListener('mousemove', (e) => {
+        if (!dragState) return;
+
+        const r = demo.canvas.getBoundingClientRect();
+        const cx = e.clientX - r.left;
+        const cy = e.clientY - r.top;
+        const dx = cx - dragState.startCx;
+        const dy = cy - dragState.startCy;
+
+        // Only start dragging after a minimum distance (5px dead zone)
+        if (Math.hypot(dx, dy) < 5) return;
+        dragState.dragged = true;
+
+        // heading = atan2 of drag vector (canvas y is inverted)
+        const theta = Math.atan2(-dy, dx);
+
+        if (dragState.mode === 'start') {
+            demo.start.theta = theta;
+        } else {
+            demo.goal.theta = theta;
+        }
+        syncStateInputs();
+        drawAll();
+
+        // Draw drag indicator line
+        const ctx = demo.ctx;
+        ctx.save();
+        ctx.scale(demo.dpr, demo.dpr);
+        const [px, py] = worldToCanvas(dragState.x, dragState.y);
+        const len = Math.min(Math.hypot(dx, dy), 60);
+        ctx.strokeStyle = (dragState.mode === 'start') ? getColor('green') : getColor('red');
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px + len * Math.cos(-theta), py + len * Math.sin(-theta));
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+    });
+
+    demo.canvas.addEventListener('mouseup', (e) => {
+        if (!dragState) return;
+        const mode = dragState.mode;
+        const pt = (mode === 'start') ? demo.start : demo.goal;
+        if (dragState.dragged) {
+            setStatus(mode.charAt(0).toUpperCase() + mode.slice(1) +
+                ' placed at (' + pt.x.toFixed(1) + ', ' + pt.y.toFixed(1) +
+                '), θ=' + pt.theta.toFixed(2) + ' rad');
+        } else {
+            setStatus(mode.charAt(0).toUpperCase() + mode.slice(1) +
+                ' placed at (' + pt.x.toFixed(1) + ', ' + pt.y.toFixed(1) +
+                ') — drag to set heading');
+        }
+        dragState = null;
+        drawAll();
+    });
+
+    // Canvas click — obstacle mode only
     demo.canvas.addEventListener('click', (e) => {
+        if (demo.mode !== 'obstacle') return;
         const r = demo.canvas.getBoundingClientRect();
         const [wx, wy] = canvasToWorld(e.clientX - r.left, e.clientY - r.top);
-        if (demo.mode === 'start') {
-            demo.start = { x: wx, y: wy, theta: demo.start?.theta || 0 };
-            syncStateInputs();
-            setStatus('Start placed at (' + wx.toFixed(1) + ', ' + wy.toFixed(1) + ')');
-        } else if (demo.mode === 'goal') {
-            demo.goal = { x: wx, y: wy, theta: demo.goal?.theta || 0 };
-            syncStateInputs();
-            setStatus('Goal placed at (' + wx.toFixed(1) + ', ' + wy.toFixed(1) + ')');
-        } else if (demo.mode === 'obstacle') {
-            demo.obstacles.push({ cx: wx, cy: wy, r: demo.obsRadius });
-            setStatus('Obstacle added, r=' + demo.obsRadius);
-        }
+        demo.obstacles.push({ cx: wx, cy: wy, r: demo.obsRadius });
+        setStatus('Obstacle added, r=' + demo.obsRadius);
         drawAll();
+    });
+
+    // Cancel drag on mouse leaving canvas
+    demo.canvas.addEventListener('mouseleave', () => {
+        if (dragState) { dragState = null; drawAll(); }
     });
 
     // Right-click to remove obstacle
@@ -655,6 +749,9 @@ function initDemo() {
             document.querySelectorAll('#mode-group .btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             demo.mode = btn.dataset.mode;
+            // Update cursor based on mode
+            demo.canvas.style.cursor =
+                (demo.mode === 'start' || demo.mode === 'goal') ? 'crosshair' : 'default';
         });
     });
 
