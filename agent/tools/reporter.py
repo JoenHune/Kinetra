@@ -36,8 +36,9 @@ class Reporter:
         lines.append("|------|-------|-------|------|-------|----------|")
 
         for rec in history:
-            phases = {p["phase"]: p for p in rec.get("phases", []) if isinstance(rec, dict)}
-            if not isinstance(rec, dict):
+            if isinstance(rec, dict):
+                phases = {p["phase"]: p for p in rec.get("phases", [])}
+            else:
                 # dataclass
                 phases = {p.phase: p for p in rec.phases}
 
