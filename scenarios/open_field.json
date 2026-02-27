@@ -1,0 +1,9 @@
+{
+  "start": {"x": -8.0, "y": -5.0, "theta": 0.0, "t": 0.0},
+  "goal":  {"x":  8.0, "y":  5.0, "theta": 0.0, "t": 0.0},
+  "environment": {
+    "bounds": {"min": [-10, -7], "max": [10, 7]},
+    "obstacles": []
+  },
+  "options": {"maxIterations": 3000, "timeLimitMs": 3000, "goalTolerance": 1.0}
+}

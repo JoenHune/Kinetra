@@ -81,6 +81,7 @@ add_library(kinetra STATIC
     # Solvers
     src/solvers/qp_admm.cpp
     src/solvers/lqr.cpp
+    src/solvers/sqp.cpp
 
     # Planners
     src/planners/rrt_star.cpp

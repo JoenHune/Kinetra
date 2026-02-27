@@ -234,6 +234,7 @@
         .legend-obstacle::before { background: #f8514980; }
         .legend-tree::before { background: #30363d; }
         .legend-path::before { background: var(--accent); }
+        .legend-stomp::before { background: #d2992240; }
     </style>
 </head>
 <body>
@@ -279,6 +280,8 @@
                         <select id="algo-select">
                             <option value="rrt-star">RRT*</option>
                             <option value="greedy-best">Greedy Best-First</option>
+                            <option value="lattice">Lattice A*</option>
+                            <option value="stomp">STOMP</option>
                         </select>
                     </div>
 
@@ -314,6 +317,12 @@
                     <div class="control-group">
                         <button class="btn" id="btn-preset-2" style="width:100%">📐 Preset: Maze</button>
                     </div>
+                    <div class="control-group">
+                        <button class="btn" id="btn-preset-3" style="width:100%">📐 Preset: Cluttered Field</button>
+                    </div>
+                    <div class="control-group">
+                        <button class="btn" id="btn-preset-4" style="width:100%">📐 Preset: U-Turn</button>
+                    </div>
                 </div>
             </div>
 
@@ -327,6 +336,7 @@
                         <span class="legend-obstacle">Obstacle</span>
                         <span class="legend-tree">Search Tree</span>
                         <span class="legend-path">Solution Path</span>
+                        <span class="legend-stomp">STOMP Rollouts</span>
                     </div>
                     <div class="demo-status" id="demo-status">Click the canvas to place Start, then Goal, then obstacles. Press ▶ Plan to run.</div>
                 </div>

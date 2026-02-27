@@ -1,0 +1,13 @@
+{
+  "start": {"x": -8.0, "y": -5.0, "theta": 0.7854, "t": 0.0},
+  "goal":  {"x":  8.0, "y":  0.0, "theta": 0.0, "t": 0.0},
+  "environment": {
+    "bounds": {"min": [-10, -7], "max": [10, 7]},
+    "obstacles": [
+      {"type": "circle", "center": [-4.0, -2.0], "radius": 2.0},
+      {"type": "circle", "center": [ 0.0,  2.0], "radius": 2.5},
+      {"type": "circle", "center": [ 5.0, -3.0], "radius": 1.8}
+    ]
+  },
+  "options": {"maxIterations": 5000, "timeLimitMs": 5000, "goalTolerance": 1.0}
+}

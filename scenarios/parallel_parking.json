@@ -1,0 +1,14 @@
+{
+  "start": {"x": -5.0, "y": -2.0, "theta": 1.5708, "t": 0.0},
+  "goal":  {"x": -5.0, "y":  2.0, "theta": 1.5708, "t": 0.0},
+  "environment": {
+    "bounds": {"min": [-10, -7], "max": [10, 7]},
+    "obstacles": [
+      {"type": "rectangle", "min": [-8.0, -0.3], "max": [-6.5, 0.3]},
+      {"type": "rectangle", "min": [-3.5, -0.3], "max": [-2.0, 0.3]},
+      {"type": "rectangle", "min": [-8.0, -4.0], "max": [-7.5, 4.0]},
+      {"type": "rectangle", "min": [-2.5, -4.0], "max": [-2.0, 4.0]}
+    ]
+  },
+  "options": {"maxIterations": 5000, "timeLimitMs": 5000, "goalTolerance": 1.0}
+}
