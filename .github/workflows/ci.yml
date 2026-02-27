@@ -132,6 +132,32 @@ jobs:
           arm-linux-gnueabihf-size build-arm/libkinetra.a >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
+  # ──────────────────────── WebAssembly Build ─────────────────────────────────
+  wasm:
+    runs-on: ubuntu-24.04
+    name: "WebAssembly (Emscripten)"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.51
+
+      - name: Configure Wasm build
+        run: emcmake cmake -B build-wasm -S wasm -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-wasm --parallel
+
+      - name: Verify output
+        run: |
+          echo "### WebAssembly Build" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -lh build-wasm/kinetra_wasm.js build-wasm/kinetra_wasm.wasm >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
   # ──────────────────────── Benchmarks (Release) ─────────────────────────────
   benchmarks:
     runs-on: ubuntu-24.04
@@ -176,7 +202,7 @@ jobs:
   # ──────────────────────── Deploy GitHub Pages ──────────────────────────────
   pages:
     runs-on: ubuntu-24.04
-    needs: [build-test]
+    needs: [build-test, wasm]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       pages: write

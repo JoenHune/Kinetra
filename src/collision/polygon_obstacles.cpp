@@ -2,6 +2,7 @@
 // GJK-based convex polygon collision detection for 2D.
 // Used to rasterize PolygonObstacle into OccupancyGrid2D.
 
+#include "kinetra/collision/polygon_obstacles.hpp"
 #include "kinetra/collision/occupancy_grid.hpp"
 
 #include <algorithm>
@@ -13,7 +14,7 @@ namespace kinetra::collision {
 namespace {
 
 // ── GJK support function: farthest vertex in direction d ─────────────────────
-Vec2 support(const std::vector<Vec2>& vertices, const Vec2& d) {
+Vec2 gjkSupport(const std::vector<Vec2>& vertices, const Vec2& d) {
     Scalar best = -constants::kInfinity;
     Vec2 result = vertices[0];
     for (const auto& v : vertices) {
@@ -30,7 +31,7 @@ Vec2 support(const std::vector<Vec2>& vertices, const Vec2& d) {
 Vec2 supportMinkowski(const std::vector<Vec2>& A,
                        const std::vector<Vec2>& B,
                        const Vec2& d) {
-    return support(A, d) - support(B, -d);
+    return gjkSupport(A, d) - gjkSupport(B, -d);
 }
 
 // Triple product: (A × B) × C  (2D version returns a Vec2)
@@ -40,6 +41,8 @@ Vec2 tripleProduct(const Vec2& a, const Vec2& b, const Vec2& c) {
     Scalar cross = a.x() * b.y() - a.y() * b.x();
     return Vec2(-cross * c.y(), cross * c.x());
 }
+
+}  // anonymous namespace
 
 // ── GJK algorithm: returns true if convex shapes A and B overlap ─────────────
 bool gjkIntersect(const std::vector<Vec2>& A, const std::vector<Vec2>& B) {
@@ -157,8 +160,6 @@ Scalar signedDistanceToPolygon(const Vec2& point, const std::vector<Vec2>& verti
     }
     return min_dist;
 }
-
-}  // anonymous namespace
 
 // ── Public API: add polygon obstacle to the occupancy grid ───────────────────
 void OccupancyGrid2D::addPolygonObstacle(const std::vector<Vec2>& vertices) {

@@ -29,8 +29,10 @@
 #include "kinetra/core/types.hpp"
 #include "kinetra/io/json_export.hpp"
 #include "kinetra/planners/ilqr.hpp"
+#include "kinetra/planners/mpcc.hpp"
 #include "kinetra/planners/rrt_star.hpp"
 #include "kinetra/planners/stomp.hpp"
+#include "kinetra/core/reference_path.hpp"
 #include "kinetra/robots/ackermann.hpp"
 #include "kinetra/robots/differential_drive.hpp"
 #include "kinetra/robots/omnidirectional.hpp"
@@ -508,10 +510,248 @@ std::string planPipeline(const std::string& jsonInput) {
     }
 }
 
+/// Optimise a trajectory using SE(2)-MPCC (Model Predictive Contouring Control).
+/// Requires "referencePath" in JSON with an array of waypoints.
+/// Model names: "DiffDriveSimple", "DiffDriveAccel", "AckermannSimple", "OmniSimple"
+std::string optimizeMPCC(const std::string& jsonInput) {
+    try {
+        JsonParser parser(jsonInput);
+        auto root = parser.parse();
+        auto problem = parseProblem(root);
+
+        std::string modelName = "DiffDriveSimple";
+        if (auto* mn = root.find("model"))
+            modelName = mn->asString();
+
+        // Parse reference path from JSON
+        std::vector<Waypoint2D> refWps;
+        if (auto* rp = root.find("referencePath")) {
+            for (const auto& wp : rp->asArray())
+                refWps.push_back(parseWaypoint(wp));
+        }
+        // Fallback: generate straight-line reference
+        if (refWps.empty()) {
+            int nPts = 20;
+            for (int i = 0; i < nPts; ++i) {
+                Scalar t = static_cast<Scalar>(i) / static_cast<Scalar>(nPts - 1);
+                refWps.push_back({
+                    problem.start.x + t * (problem.goal.x - problem.start.x),
+                    problem.start.y + t * (problem.goal.y - problem.start.y),
+                    problem.start.theta + t * normalizeAngle(problem.goal.theta - problem.start.theta),
+                    t
+                });
+            }
+        }
+        ReferencePath refPath(refWps);
+
+        planners::MPCCOptions opts;
+        if (auto* po = root.find("plannerOptions")) {
+            if (auto* v = po->find("horizon"))
+                opts.horizon = static_cast<int>(v->asNumber());
+            if (auto* v = po->find("dt"))
+                opts.dt = static_cast<Scalar>(v->asNumber());
+            if (auto* v = po->find("wContour"))
+                opts.wContour = static_cast<Scalar>(v->asNumber());
+            if (auto* v = po->find("wLag"))
+                opts.wLag = static_cast<Scalar>(v->asNumber());
+            if (auto* v = po->find("wHeading"))
+                opts.wHeading = static_cast<Scalar>(v->asNumber());
+            if (auto* v = po->find("wProgress"))
+                opts.wProgress = static_cast<Scalar>(v->asNumber());
+            if (auto* v = po->find("wControl"))
+                opts.wControl = static_cast<Scalar>(v->asNumber());
+            if (auto* v = po->find("wObstacle"))
+                opts.wObstacle = static_cast<Scalar>(v->asNumber());
+            if (auto* v = po->find("safeDistance"))
+                opts.safeDistance = static_cast<Scalar>(v->asNumber());
+            if (auto* v = po->find("maxProgressRate"))
+                opts.maxProgressRate = static_cast<Scalar>(v->asNumber());
+            if (auto* v = po->find("sqpMaxIterations"))
+                opts.sqpSettings.maxIterations = static_cast<int>(v->asNumber());
+        }
+        if (problem.options.timeLimitMs > 0)
+            opts.sqpSettings.timeLimitMs = problem.options.timeLimitMs;
+
+        auto grid = buildGrid(problem.environment);
+
+        // Build MPCC result JSON (extends planningResult with MPCC metrics)
+        auto buildMpccJson = [&](auto& mpcc) -> std::string {
+            auto mpccResult = mpcc.solve(problem, grid);
+            std::ostringstream os;
+            os << "{";
+            // Standard planning result
+            os << "\"result\":";
+            io::toJSON(os, mpccResult.planningResult);
+            // MPCC-specific data
+            os << ",\"mpcc\":{";
+            os << "\"sqpIterations\":" << mpccResult.sqpIterations;
+            os << ",\"finalCost\":" << mpccResult.finalCost;
+            os << ",\"constraintViolation\":" << mpccResult.constraintViolation;
+            os << ",\"progress\":[";
+            for (std::size_t i = 0; i < mpccResult.progressValues.size(); ++i) {
+                if (i > 0) os << ",";
+                os << mpccResult.progressValues[i];
+            }
+            os << "],\"contourErrors\":[";
+            for (std::size_t i = 0; i < mpccResult.contourErrors.size(); ++i) {
+                if (i > 0) os << ",";
+                os << mpccResult.contourErrors[i];
+            }
+            os << "],\"lagErrors\":[";
+            for (std::size_t i = 0; i < mpccResult.lagErrors.size(); ++i) {
+                if (i > 0) os << ",";
+                os << mpccResult.lagErrors[i];
+            }
+            os << "],\"headingErrors\":[";
+            for (std::size_t i = 0; i < mpccResult.headingErrors.size(); ++i) {
+                if (i > 0) os << ",";
+                os << mpccResult.headingErrors[i];
+            }
+            os << "]}}";
+            return os.str();
+        };
+
+        if (modelName == "DiffDriveSimple") {
+            DiffDriveSimple model;
+            planners::MPCC<DiffDriveSimple> mpcc(model, refPath, opts);
+            return buildMpccJson(mpcc);
+        } else if (modelName == "DiffDriveAccel") {
+            DiffDriveAccel model;
+            planners::MPCC<DiffDriveAccel> mpcc(model, refPath, opts);
+            return buildMpccJson(mpcc);
+        } else if (modelName == "AckermannSimple") {
+            AckermannSimple model;
+            planners::MPCC<AckermannSimple> mpcc(model, refPath, opts);
+            return buildMpccJson(mpcc);
+        } else if (modelName == "OmniSimple") {
+            OmniSimple model;
+            planners::MPCC<OmniSimple> mpcc(model, refPath, opts);
+            return buildMpccJson(mpcc);
+        } else {
+            return "{\"error\":\"Unknown model: " + modelName + "\"}";
+        }
+    } catch (const std::exception& e) {
+        return std::string("{\"error\":\"") + e.what() + "\"}";
+    }
+}
+
+/// Run a two-stage pipeline: RRT* for initial path → MPCC for
+/// trajectory optimisation using the RRT* path as reference.
+std::string planPipelineMPCC(const std::string& jsonInput) {
+    try {
+        JsonParser parser(jsonInput);
+        auto root = parser.parse();
+        auto problem = parseProblem(root);
+
+        std::string modelName = "DiffDriveSimple";
+        if (auto* mn = root.find("model"))
+            modelName = mn->asString();
+
+        auto grid = buildGrid(problem.environment);
+
+        // ── Stage 1: RRT* ───────────────────────────────────────────────
+        planners::RRTStarOptions rrtOpts;
+        rrtOpts.maxIterations = 3000;
+        rrtOpts.stepSize = 0.5;
+        rrtOpts.goalBias = 0.1;
+        rrtOpts.timeLimitMs = problem.options.timeLimitMs / 2.0;
+
+        if (auto* po = root.find("rrtOptions")) {
+            if (auto* v = po->find("maxIterations"))
+                rrtOpts.maxIterations = static_cast<int>(v->asNumber());
+            if (auto* v = po->find("stepSize"))
+                rrtOpts.stepSize = static_cast<Scalar>(v->asNumber());
+            if (auto* v = po->find("goalBias"))
+                rrtOpts.goalBias = static_cast<Scalar>(v->asNumber());
+        }
+
+        planners::RRTStar rrt(rrtOpts);
+        rrt.setCollisionChecker(
+            [&grid](const Vec2& p) { return grid.isFree(p); },
+            [&grid](const Vec2& a, const Vec2& b) { return grid.isSegmentFree(a, b); }
+        );
+
+        auto rrtResult = rrt.solve(problem);
+
+        // ── Stage 2: MPCC using RRT* path as reference ──────────────────
+        planners::MPCCResult mpccResult;
+        if (rrtResult.success() && rrtResult.trajectory.size() >= 2) {
+            ReferencePath refPath(rrtResult.trajectory);
+
+            planners::MPCCOptions mpccOpts;
+            mpccOpts.sqpSettings.timeLimitMs = problem.options.timeLimitMs / 2.0;
+            if (auto* po = root.find("mpccOptions")) {
+                if (auto* v = po->find("horizon"))
+                    mpccOpts.horizon = static_cast<int>(v->asNumber());
+                if (auto* v = po->find("dt"))
+                    mpccOpts.dt = static_cast<Scalar>(v->asNumber());
+                if (auto* v = po->find("wContour"))
+                    mpccOpts.wContour = static_cast<Scalar>(v->asNumber());
+                if (auto* v = po->find("wLag"))
+                    mpccOpts.wLag = static_cast<Scalar>(v->asNumber());
+                if (auto* v = po->find("wProgress"))
+                    mpccOpts.wProgress = static_cast<Scalar>(v->asNumber());
+            }
+
+            if (modelName == "DiffDriveSimple") {
+                DiffDriveSimple m;
+                planners::MPCC<DiffDriveSimple> mpcc(m, refPath, mpccOpts);
+                mpccResult = mpcc.solve(problem, grid);
+            } else if (modelName == "DiffDriveAccel") {
+                DiffDriveAccel m;
+                planners::MPCC<DiffDriveAccel> mpcc(m, refPath, mpccOpts);
+                mpccResult = mpcc.solve(problem, grid);
+            } else if (modelName == "AckermannSimple") {
+                AckermannSimple m;
+                planners::MPCC<AckermannSimple> mpcc(m, refPath, mpccOpts);
+                mpccResult = mpcc.solve(problem, grid);
+            } else {
+                OmniSimple m;
+                planners::MPCC<OmniSimple> mpcc(m, refPath, mpccOpts);
+                mpccResult = mpcc.solve(problem, grid);
+            }
+        }
+
+        // Build combined JSON
+        std::ostringstream os;
+        os << "{\"rrt\":";
+        io::toJSON(os, rrtResult);
+        os << ",\"optimized\":";
+        io::toJSON(os, mpccResult.planningResult);
+        os << ",\"mpcc\":{";
+        os << "\"sqpIterations\":" << mpccResult.sqpIterations;
+        os << ",\"finalCost\":" << mpccResult.finalCost;
+        os << ",\"progress\":[";
+        for (std::size_t i = 0; i < mpccResult.progressValues.size(); ++i) {
+            if (i > 0) os << ",";
+            os << mpccResult.progressValues[i];
+        }
+        os << "],\"contourErrors\":[";
+        for (std::size_t i = 0; i < mpccResult.contourErrors.size(); ++i) {
+            if (i > 0) os << ",";
+            os << mpccResult.contourErrors[i];
+        }
+        os << "]}";
+        os << ",\"problem\":{";
+        os << "\"start\":{\"x\":" << problem.start.x
+           << ",\"y\":" << problem.start.y
+           << ",\"theta\":" << problem.start.theta << "},";
+        os << "\"goal\":{\"x\":" << problem.goal.x
+           << ",\"y\":" << problem.goal.y
+           << ",\"theta\":" << problem.goal.theta << "},";
+        os << "\"environment\":";
+        io::toJSON(os, problem.environment);
+        os << "}}";
+        return os.str();
+    } catch (const std::exception& e) {
+        return std::string("{\"error\":\"") + e.what() + "\"}";
+    }
+}
+
 /// Return library version info.
 std::string getVersion() {
-    return "{\"name\":\"Kinetra\",\"version\":\"0.4.0\","
-           "\"algorithms\":[\"RRT*\",\"STOMP\",\"iLQR\"],"
+    return "{\"name\":\"Kinetra\",\"version\":\"0.5.0\","
+           "\"algorithms\":[\"RRT*\",\"STOMP\",\"iLQR\",\"SQP\",\"MPCC\"],"
            "\"models\":[\"DiffDriveSimple\",\"DiffDriveAccel\","
            "\"AckermannSimple\",\"OmniSimple\"]}";
 }
@@ -520,9 +760,11 @@ std::string getVersion() {
 // Embind registration
 // ═════════════════════════════════════════════════════════════════════════════
 EMSCRIPTEN_BINDINGS(kinetra) {
-    emscripten::function("planRRTStar",     &planRRTStar);
-    emscripten::function("optimizeSTOMP",   &optimizeSTOMP);
-    emscripten::function("optimizeiLQR",    &optimizeiLQR);
-    emscripten::function("planPipeline",    &planPipeline);
-    emscripten::function("getVersion",      &getVersion);
+    emscripten::function("planRRTStar",       &planRRTStar);
+    emscripten::function("optimizeSTOMP",     &optimizeSTOMP);
+    emscripten::function("optimizeiLQR",      &optimizeiLQR);
+    emscripten::function("optimizeMPCC",      &optimizeMPCC);
+    emscripten::function("planPipeline",      &planPipeline);
+    emscripten::function("planPipelineMPCC",  &planPipelineMPCC);
+    emscripten::function("getVersion",        &getVersion);
 }

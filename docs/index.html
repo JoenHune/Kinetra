@@ -85,6 +85,7 @@
                         <select id="optimizer-select">
                             <option value="iLQR">iLQR (Iterative LQR)</option>
                             <option value="STOMP">STOMP (Stochastic)</option>
+                            <option value="MPCC">MPCC (Contouring Control)</option>
                         </select>
                     </div>
 
@@ -101,6 +102,33 @@
                     <div class="control-group">
                         <label>iLQR Horizon <span class="range-value" id="horizon-val">50</span></label>
                         <input type="range" id="ilqr-horizon" min="20" max="200" step="10" value="50">
+                    </div>
+
+                    <div id="mpcc-weights" style="display:none">
+                        <div class="control-group">
+                            <label>MPCC Horizon <span class="range-value" id="mpcc-horizon-val">30</span></label>
+                            <input type="range" id="mpcc-horizon" min="10" max="80" step="5" value="30">
+                        </div>
+                        <div class="control-group">
+                            <label>Contour Weight <span class="range-value" id="wc-val">50</span></label>
+                            <input type="range" id="wContour" min="1" max="200" step="1" value="50">
+                        </div>
+                        <div class="control-group">
+                            <label>Lag Weight <span class="range-value" id="wl-val">20</span></label>
+                            <input type="range" id="wLag" min="1" max="100" step="1" value="20">
+                        </div>
+                        <div class="control-group">
+                            <label>Heading Weight <span class="range-value" id="wh-val">30</span></label>
+                            <input type="range" id="wHeading" min="1" max="100" step="1" value="30">
+                        </div>
+                        <div class="control-group">
+                            <label>Progress Reward <span class="range-value" id="wp-val">5</span></label>
+                            <input type="range" id="wProgress" min="0.1" max="50" step="0.5" value="5">
+                        </div>
+                        <div class="control-group">
+                            <label>Control Weight <span class="range-value" id="wu-val">1</span></label>
+                            <input type="range" id="wControl" min="0.1" max="20" step="0.1" value="1">
+                        </div>
                     </div>
 
                     <div class="control-group" style="margin-top:1rem">
@@ -175,6 +203,14 @@
                 <div class="card">
                     <h2>Velocity Profile</h2>
                     <div id="plot-demo-velocity" style="height:250px;"></div>
+                </div>
+
+                <div class="card" id="mpcc-analysis-card" style="display:none">
+                    <h2>MPCC Analysis</h2>
+                    <div class="grid-2">
+                        <div id="plot-mpcc-errors" style="height:250px;"></div>
+                        <div id="plot-mpcc-progress" style="height:250px;"></div>
+                    </div>
                 </div>
             </div>
         </div>

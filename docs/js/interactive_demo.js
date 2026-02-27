@@ -35,6 +35,11 @@ const demo = {
     model: 'DiffDriveSimple',
     optimizer: 'iLQR',
 
+    // MPCC weights
+    mpccHorizon: 30,
+    wContour: 50, wLag: 20, wHeading: 30, wProgress: 5, wControl: 1,
+    mpccData: null,   // MPCC-specific result data
+
     rrtPath: null,
     optPath: null,
     rrtResult: null,
@@ -241,33 +246,69 @@ async function runPipeline() {
     enablePlanButtons(false);
     setStatus('Running RRT* + ' + demo.optimizer + '...');
     setPipelineState('rrt');
+    demo.mpccData = null;
 
-    const json = buildProblemJSON({
-        model: demo.model, optimizer: demo.optimizer,
-        rrtOptions: { maxIterations: demo.rrtIterations, stepSize: 0.5, goalBias: 0.1 },
-        ilqrOptions: { horizon: demo.ilqrHorizon, dt: 0.05 },
-        stompOptions: { numRollouts: 30, noiseSigma: 0.5 },
-    });
-
-    try {
-        const result = JSON.parse(demo.wasm.planPipeline(JSON.stringify(json)));
-        if (result.error) { setStatus('Error: ' + result.error); }
-        else {
-            setPipelineState('opt');
-            demo.rrtResult = result.rrt;
-            demo.rrtPath = result.rrt?.trajectory || null;
-            demo.optResult = result.optimized;
-            demo.optPath = result.optimized?.trajectory || null;
-            updateRRTStats(result.rrt);
-            updateOptStats(result.optimized);
-            renderVelocityProfile(demo.optPath || demo.rrtPath);
-            setPipelineState('done');
-            setStatus('Pipeline complete — RRT*: ' +
-                (result.rrt?.solve_time_ms?.toFixed(1) || '?') + 'ms, ' +
-                demo.optimizer + ': ' +
-                (result.optimized?.solve_time_ms?.toFixed(1) || '?') + 'ms');
-        }
-    } catch (e) { setStatus('Error: ' + e.message); }
+    if (demo.optimizer === 'MPCC') {
+        // Use MPCC-specific pipeline
+        const json = buildProblemJSON({
+            model: demo.model,
+            rrtOptions: { maxIterations: demo.rrtIterations, stepSize: 0.5, goalBias: 0.1 },
+            mpccOptions: {
+                horizon: demo.mpccHorizon, dt: 0.05,
+                wContour: demo.wContour, wLag: demo.wLag,
+                wProgress: demo.wProgress,
+            },
+        });
+        try {
+            const result = JSON.parse(demo.wasm.planPipelineMPCC(JSON.stringify(json)));
+            if (result.error) { setStatus('Error: ' + result.error); }
+            else {
+                setPipelineState('opt');
+                demo.rrtResult = result.rrt;
+                demo.rrtPath = result.rrt?.trajectory || null;
+                demo.optResult = result.optimized;
+                demo.optPath = result.optimized?.trajectory || null;
+                demo.mpccData = result.mpcc || null;
+                updateRRTStats(result.rrt);
+                updateOptStats(result.optimized);
+                renderVelocityProfile(demo.optPath || demo.rrtPath);
+                renderMPCCAnalysis(demo.mpccData);
+                setPipelineState('done');
+                setStatus('Pipeline complete — RRT*: ' +
+                    (result.rrt?.solve_time_ms?.toFixed(1) || '?') + 'ms, MPCC: ' +
+                    (result.optimized?.solve_time_ms?.toFixed(1) || '?') + 'ms' +
+                    (result.mpcc?.sqpIterations ? (' (' + result.mpcc.sqpIterations + ' SQP iters)') : ''));
+            }
+        } catch (e) { setStatus('Error: ' + e.message); }
+    } else {
+        // Original iLQR/STOMP pipeline
+        const json = buildProblemJSON({
+            model: demo.model, optimizer: demo.optimizer,
+            rrtOptions: { maxIterations: demo.rrtIterations, stepSize: 0.5, goalBias: 0.1 },
+            ilqrOptions: { horizon: demo.ilqrHorizon, dt: 0.05 },
+            stompOptions: { numRollouts: 30, noiseSigma: 0.5 },
+        });
+        try {
+            const result = JSON.parse(demo.wasm.planPipeline(JSON.stringify(json)));
+            if (result.error) { setStatus('Error: ' + result.error); }
+            else {
+                setPipelineState('opt');
+                demo.rrtResult = result.rrt;
+                demo.rrtPath = result.rrt?.trajectory || null;
+                demo.optResult = result.optimized;
+                demo.optPath = result.optimized?.trajectory || null;
+                updateRRTStats(result.rrt);
+                updateOptStats(result.optimized);
+                renderVelocityProfile(demo.optPath || demo.rrtPath);
+                hideMPCCAnalysis();
+                setPipelineState('done');
+                setStatus('Pipeline complete — RRT*: ' +
+                    (result.rrt?.solve_time_ms?.toFixed(1) || '?') + 'ms, ' +
+                    demo.optimizer + ': ' +
+                    (result.optimized?.solve_time_ms?.toFixed(1) || '?') + 'ms');
+            }
+        } catch (e) { setStatus('Error: ' + e.message); }
+    }
 
     demo.running = false;
     enablePlanButtons(true);
@@ -312,26 +353,56 @@ async function runOptOnly() {
     enablePlanButtons(false);
     setStatus('Running ' + demo.optimizer + '...');
     setPipelineState('opt');
+    demo.mpccData = null;
 
     const opt = demo.optimizer;
-    const json = opt === 'STOMP'
-        ? buildProblemJSON({ plannerOptions: { numTimesteps: 60, numRollouts: 30, maxIterations: 100, noiseSigma: 0.5 } })
-        : buildProblemJSON({ model: demo.model, plannerOptions: { horizon: demo.ilqrHorizon, dt: 0.05, maxIterations: 100 } });
 
     try {
-        const raw = opt === 'STOMP'
-            ? demo.wasm.optimizeSTOMP(JSON.stringify(json))
-            : demo.wasm.optimizeiLQR(JSON.stringify(json));
-        const result = JSON.parse(raw);
-        if (result.error) { setStatus('Error: ' + result.error); }
-        else {
-            const r = result.result || result;
-            demo.optResult = r;
-            demo.optPath = r.trajectory || null;
-            updateOptStats(r);
-            renderVelocityProfile(demo.optPath);
-            setPipelineState('done');
-            setStatus(opt + ' complete — ' + (r.solve_time_ms?.toFixed(1) || '?') + 'ms');
+        let raw, result;
+        if (opt === 'MPCC') {
+            const json = buildProblemJSON({
+                model: demo.model,
+                plannerOptions: {
+                    horizon: demo.mpccHorizon, dt: 0.05,
+                    wContour: demo.wContour, wLag: demo.wLag,
+                    wHeading: demo.wHeading, wProgress: demo.wProgress,
+                    wControl: demo.wControl, sqpMaxIterations: 20,
+                },
+            });
+            raw = demo.wasm.optimizeMPCC(JSON.stringify(json));
+            result = JSON.parse(raw);
+            if (result.error) { setStatus('Error: ' + result.error); }
+            else {
+                const r = result.result || result;
+                demo.optResult = r;
+                demo.optPath = r.trajectory || null;
+                demo.mpccData = result.mpcc || null;
+                updateOptStats(r);
+                renderVelocityProfile(demo.optPath);
+                renderMPCCAnalysis(demo.mpccData);
+                setPipelineState('done');
+                setStatus('MPCC complete — ' + (r.solve_time_ms?.toFixed(1) || '?') + 'ms' +
+                    (result.mpcc?.sqpIterations ? (' (' + result.mpcc.sqpIterations + ' SQP iters)') : ''));
+            }
+        } else {
+            const json = opt === 'STOMP'
+                ? buildProblemJSON({ plannerOptions: { numTimesteps: 60, numRollouts: 30, maxIterations: 100, noiseSigma: 0.5 } })
+                : buildProblemJSON({ model: demo.model, plannerOptions: { horizon: demo.ilqrHorizon, dt: 0.05, maxIterations: 100 } });
+            raw = opt === 'STOMP'
+                ? demo.wasm.optimizeSTOMP(JSON.stringify(json))
+                : demo.wasm.optimizeiLQR(JSON.stringify(json));
+            result = JSON.parse(raw);
+            if (result.error) { setStatus('Error: ' + result.error); }
+            else {
+                const r = result.result || result;
+                demo.optResult = r;
+                demo.optPath = r.trajectory || null;
+                updateOptStats(r);
+                renderVelocityProfile(demo.optPath);
+                hideMPCCAnalysis();
+                setPipelineState('done');
+                setStatus(opt + ' complete — ' + (r.solve_time_ms?.toFixed(1) || '?') + 'ms');
+            }
         }
     } catch (e) { setStatus('Error: ' + e.message); }
 
@@ -414,7 +485,57 @@ function renderVelocityProfile(path) {
 
 window.updatePlotlyTheme = function() {
     renderVelocityProfile(demo.optPath || demo.rrtPath);
+    if (demo.mpccData) renderMPCCAnalysis(demo.mpccData);
 };
+
+// ═════════════════════════════════════════════════════════════════════════
+// MPCC Analysis Plots
+// ═════════════════════════════════════════════════════════════════════════
+function renderMPCCAnalysis(mpcc) {
+    const card = document.getElementById('mpcc-analysis-card');
+    if (!mpcc || !card) return;
+    card.style.display = '';
+
+    const th = getPlotlyTheme();
+    const layout = (title, yLabel) => ({
+        paper_bgcolor: th.paper_bgcolor, plot_bgcolor: th.plot_bgcolor,
+        font: th.font, margin: { l: 50, r: 20, t: 30, b: 40 },
+        xaxis: { gridcolor: th.gridcolor, title: 'Step k' },
+        yaxis: { gridcolor: th.gridcolor, title: yLabel },
+        title: { text: title, font: { size: 13 } },
+        legend: { orientation: 'h', y: -0.25 },
+    });
+
+    // Contour + Lag + Heading errors
+    const steps = mpcc.contourErrors ? mpcc.contourErrors.map((_, i) => i) : [];
+    const errEl = document.getElementById('plot-mpcc-errors');
+    Plotly.newPlot(errEl, [
+        { x: steps, y: mpcc.contourErrors, name: 'Contour eₒ', line: { color: '#58a6ff', width: 2 } },
+        { x: steps, y: mpcc.lagErrors, name: 'Lag eₗ', line: { color: '#f0883e', width: 2 } },
+        { x: steps, y: mpcc.headingErrors, name: 'Heading eθ', line: { color: '#a371f7', width: 2 } },
+    ], layout('Tracking Errors', 'Error'), { responsive: true, displayModeBar: false });
+
+    // Progress along path
+    const progEl = document.getElementById('plot-mpcc-progress');
+    const progSteps = mpcc.progress ? mpcc.progress.map((_, i) => i) : [];
+    Plotly.newPlot(progEl, [
+        { x: progSteps, y: mpcc.progress, name: 'Progress s(k)', line: { color: '#3fb950', width: 2 },
+          fill: 'tozeroy', fillcolor: '#3fb95020' },
+    ], layout('Path Progress', 's (arc-length)'), { responsive: true, displayModeBar: false });
+}
+
+function hideMPCCAnalysis() {
+    const card = document.getElementById('mpcc-analysis-card');
+    if (card) card.style.display = 'none';
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Optimizer select → show/hide MPCC weight panel
+// ═════════════════════════════════════════════════════════════════════════
+function toggleMPCCPanel() {
+    const mpccPanel = document.getElementById('mpcc-weights');
+    if (mpccPanel) mpccPanel.style.display = demo.optimizer === 'MPCC' ? '' : 'none';
+}
 
 // ═════════════════════════════════════════════════════════════════════════
 // Presets
@@ -548,7 +669,22 @@ function initDemo() {
 
     // Selects
     document.getElementById('model-select').addEventListener('change', e => { demo.model = e.target.value; });
-    document.getElementById('optimizer-select').addEventListener('change', e => { demo.optimizer = e.target.value; });
+    document.getElementById('optimizer-select').addEventListener('change', e => {
+        demo.optimizer = e.target.value;
+        toggleMPCCPanel();
+    });
+
+    // MPCC weight sliders
+    [['mpcc-horizon', 'mpcc-horizon-val', v => { demo.mpccHorizon = parseInt(v); return v; }],
+     ['wContour', 'wc-val', v => { demo.wContour = parseFloat(v); return v; }],
+     ['wLag', 'wl-val', v => { demo.wLag = parseFloat(v); return v; }],
+     ['wHeading', 'wh-val', v => { demo.wHeading = parseFloat(v); return v; }],
+     ['wProgress', 'wp-val', v => { demo.wProgress = parseFloat(v); return v; }],
+     ['wControl', 'wu-val', v => { demo.wControl = parseFloat(v); return v; }],
+    ].forEach(([sid, vid, fn]) => {
+        const s = document.getElementById(sid), v = document.getElementById(vid);
+        if (s && v) s.addEventListener('input', () => { v.textContent = fn(s.value); });
+    });
 
     // State inputs
     ['start-x','start-y','start-theta','goal-x','goal-y','goal-theta'].forEach(id => {
@@ -563,12 +699,13 @@ function initDemo() {
     // Clear
     document.getElementById('btn-clear').addEventListener('click', () => {
         demo.obstacles = []; demo.rrtPath = null; demo.optPath = null;
-        demo.rrtResult = null; demo.optResult = null;
+        demo.rrtResult = null; demo.optResult = null; demo.mpccData = null;
         demo.start = { x: -7, y: 0, theta: 0 }; demo.goal = { x: 7, y: 0, theta: 0 };
         syncStateInputs(); clearOptStats();
         ['rrt-stat-nodes','rrt-stat-length','rrt-stat-time'].forEach(id => document.getElementById(id).textContent = '-');
         setPipelineState('');
         Plotly.purge(document.getElementById('plot-demo-velocity'));
+        hideMPCCAnalysis();
         setStatus('Cleared.'); drawAll();
     });
 

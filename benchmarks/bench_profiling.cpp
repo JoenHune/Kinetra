@@ -5,7 +5,6 @@
 
 #include "kinetra/collision/occupancy_grid.hpp"
 #include "kinetra/planners/ilqr.hpp"
-#include "kinetra/planners/lattice.hpp"
 #include "kinetra/planners/rrt_star.hpp"
 #include "kinetra/planners/stomp.hpp"
 #include "kinetra/robots/differential_drive.hpp"
@@ -113,31 +112,6 @@ static void BM_Profile_iLQR(benchmark::State& state) {
     }
 }
 BENCHMARK(BM_Profile_iLQR)->Arg(30)->Arg(50)->Arg(100)
-    ->Unit(benchmark::kMillisecond);
-
-// ─── Lattice profiling ──────────────────────────────────────────────────────
-static void BM_Profile_Lattice(benchmark::State& state) {
-    auto grid = makeObstacleEnv();
-    auto problem = makeStandardProblem();
-
-    planners::LatticeOptions opts;
-    opts.maxExpansions = static_cast<int>(state.range(0));
-    opts.xyResolution = 0.5;
-    opts.numAngles = 16;
-    opts.timeLimitMs = 10000;
-
-    for (auto _ : state) {
-        planners::LatticePlanner planner(opts);
-        planner.setCollisionChecker(
-            [&](const Vec2& p) { return grid.isFree(p); },
-            [&](const Vec2& a, const Vec2& b) { return grid.isSegmentFree(a, b); }
-        );
-        auto result = planner.solve(problem);
-        benchmark::DoNotOptimize(result);
-        state.counters["expansions"] = result.iterations;
-    }
-}
-BENCHMARK(BM_Profile_Lattice)->Arg(5000)->Arg(20000)->Arg(50000)
     ->Unit(benchmark::kMillisecond);
 
 // ─── Dubins path profiling ──────────────────────────────────────────────────

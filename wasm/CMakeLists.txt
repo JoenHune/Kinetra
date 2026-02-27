@@ -37,6 +37,7 @@ set(KINETRA_WASM_SOURCES
     # Core
     ${KINETRA_ROOT}/src/core/trajectory.cpp
     ${KINETRA_ROOT}/src/core/result.cpp
+    ${KINETRA_ROOT}/src/core/reference_path.cpp
     # Spaces
     ${KINETRA_ROOT}/src/spaces/se2.cpp
     ${KINETRA_ROOT}/src/spaces/dubins.cpp
@@ -57,8 +58,8 @@ set(KINETRA_WASM_SOURCES
     # Planners
     ${KINETRA_ROOT}/src/planners/rrt_star.cpp
     ${KINETRA_ROOT}/src/planners/stomp.cpp
-    ${KINETRA_ROOT}/src/planners/lattice.cpp
     ${KINETRA_ROOT}/src/planners/ilqr.cpp
+    ${KINETRA_ROOT}/src/planners/mpcc.cpp
     # IO (json_export only — no filesystem)
     ${KINETRA_ROOT}/src/io/json_export.cpp
 )

@@ -60,6 +60,7 @@ add_library(kinetra STATIC
     # Core
     src/core/trajectory.cpp
     src/core/result.cpp
+    src/core/reference_path.cpp
 
     # State spaces
     src/spaces/se2.cpp
@@ -87,7 +88,7 @@ add_library(kinetra STATIC
     src/planners/rrt_star.cpp
     src/planners/stomp.cpp
     src/planners/ilqr.cpp
-    src/planners/lattice.cpp
+    src/planners/mpcc.cpp
 
     # IO
     src/io/json_export.cpp
