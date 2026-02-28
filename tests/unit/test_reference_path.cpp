@@ -19,8 +19,8 @@ TEST(ReferencePath, DefaultConstruction) {
 TEST(ReferencePath, FromWaypoints) {
     std::vector<Waypoint2D> wps = {
         {0, 0, 0, 0},
-        {1, 0, 0, 0.1},
-        {2, 0, 0, 0.2},
+        {1, 0, 0, Scalar(0.1)},
+        {2, 0, 0, Scalar(0.2)},
     };
     ReferencePath path(wps);
     EXPECT_EQ(path.waypointCount(), 3u);
@@ -32,8 +32,8 @@ TEST(ReferencePath, FromWaypoints) {
 TEST(ReferencePath, FromTrajectory) {
     Trajectory2D traj;
     traj.append({0, 0, 0, 0});
-    traj.append({1, 0, 0, 0.1});
-    traj.append({2, 0, 0, 0.2});
+    traj.append({1, 0, 0, Scalar(0.1)});
+    traj.append({2, 0, 0, Scalar(0.2)});
     ReferencePath path(traj);
     EXPECT_EQ(path.waypointCount(), 3u);
     EXPECT_NEAR(path.totalLength(), 2.0, 1e-10);
@@ -77,7 +77,7 @@ TEST(ReferencePath, ArcLengthWithRotation) {
     // Pure rotation: same position, θ changes by π/2
     ReferencePath::Options opts;
     opts.lengthTheta = 1.0;  // 1 m/rad
-    std::vector<Waypoint2D> wps = {{0,0,0,0}, {0,0,M_PI/2,0}};
+    std::vector<Waypoint2D> wps = {{0,0,0,0}, {0, 0, Scalar(M_PI/2), 0}};
     ReferencePath path(wps, opts);
     // ds = sqrt(0 + 0 + 1.0² * (π/2)²) = π/2
     EXPECT_NEAR(path.totalLength(), M_PI / 2, 1e-10);
@@ -141,7 +141,7 @@ TEST(ReferencePath, EvaluateMultiSegment) {
     std::vector<Waypoint2D> wps = {
         {0, 0, 0, 0},
         {1, 0, 0, 0},
-        {1, 1, M_PI/2, 0},
+        {1, 1, Scalar(M_PI/2), 0},
     };
     ReferencePath path(wps);
     // At s=0.5, should be on first segment
@@ -177,8 +177,8 @@ TEST(ReferencePath, NormalPerpendicular) {
 TEST(ReferencePath, TangentDiagonal) {
     // 45° path
     std::vector<Waypoint2D> wps = {
-        {0, 0, M_PI/4, 0},
-        {1, 1, M_PI/4, 0}
+        {0, 0, Scalar(M_PI/4), 0},
+        {1, 1, Scalar(M_PI/4), 0}
     };
     ReferencePath path(wps);
     Vec2 t = path.tangent(0.5);
@@ -224,7 +224,7 @@ TEST(ReferencePath, CurvatureStraight) {
 
 TEST(ReferencePath, CurvatureTurn) {
     // Quarter turn: θ goes from 0 to π/2 over length 1
-    std::vector<Waypoint2D> wps = {{0,0,0,0}, {1,0,M_PI/2,0}};
+    std::vector<Waypoint2D> wps = {{0,0,0,0}, {1, 0, Scalar(M_PI/2), 0}};
     ReferencePath path(wps);
     Scalar kappa = path.curvature(0.5);
     // κ ≈ Δθ / Δ_pos_s ≈ (π/2) / 1 ≈ 1.57

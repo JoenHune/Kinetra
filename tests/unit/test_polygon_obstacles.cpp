@@ -8,7 +8,7 @@ using namespace kinetra::collision;
 
 class PolygonObstacleTest : public ::testing::Test {
 protected:
-    OccupancyGrid2D grid_{-10, -10, 10, 10, 0.1};
+    OccupancyGrid2D grid_{-10, -10, 10, 10, Scalar(0.1)};
 };
 
 TEST_F(PolygonObstacleTest, AddPolygonMarksOccupied) {

@@ -7,7 +7,7 @@ using namespace kinetra::collision;
 
 class OccupancyGridTest : public ::testing::Test {
 protected:
-    OccupancyGrid2D grid{-10, -10, 10, 10, 0.1};
+    OccupancyGrid2D grid{-10, -10, 10, 10, Scalar(0.1)};
 };
 
 TEST_F(OccupancyGridTest, EmptyGridAllFree) {

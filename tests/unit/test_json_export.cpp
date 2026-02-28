@@ -9,7 +9,7 @@ using namespace kinetra::io;
 TEST(JSONExport, TrajectoryJSON) {
     Trajectory2D traj;
     traj.append({1.0, 2.0, 0.5, 0.0});
-    traj.append({3.0, 4.0, 1.0, 0.1});
+    traj.append({Scalar(3), Scalar(4), Scalar(1), Scalar(0.1)});
 
     std::ostringstream os;
     toJSON(os, traj, "path");
@@ -27,7 +27,7 @@ TEST(JSONExport, PlanningResultJSON) {
     result.solveTimeMs = 12.5;
     result.cost = 3.14;
     result.trajectory.append({0, 0, 0, 0});
-    result.trajectory.append({1, 0, 0, 0.1});
+    result.trajectory.append({1, 0, 0, Scalar(0.1)});
 
     std::ostringstream os;
     toJSON(os, result);
