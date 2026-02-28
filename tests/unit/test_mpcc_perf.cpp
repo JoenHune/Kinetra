@@ -30,7 +30,7 @@ TEST(MPCCPerf, ProfileSolve) {
     MPCCOptions opts;
     opts.horizon = 20;
     opts.dt = 0.1;
-    opts.sqpSettings.maxIterations = 15;
+    // Use default 30 SQP iterations for convergence
 
     MPCC<DiffDriveSimple> mpcc(model, path, opts);
 

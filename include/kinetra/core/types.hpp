@@ -7,6 +7,7 @@
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <Eigen/SparseCore>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -33,6 +34,8 @@ using Mat2   = Eigen::Matrix<Scalar, 2, 2>;
 using Mat3   = Eigen::Matrix<Scalar, 3, 3>;
 using Mat4   = Eigen::Matrix<Scalar, 4, 4>;
 using MatX   = Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic>;
+using SpMatX = Eigen::SparseMatrix<Scalar>;  // CSC sparse matrix
+using Triplet = Eigen::Triplet<Scalar>;
 using Quat   = Eigen::Quaternion<Scalar>;
 using AngleAxis = Eigen::AngleAxis<Scalar>;
 

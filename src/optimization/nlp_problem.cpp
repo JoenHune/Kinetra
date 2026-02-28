@@ -78,6 +78,35 @@ MatX NLPProblem::constraintJacobian() const {
     return jac;
 }
 
+SpMatX NLPProblem::constraintJacobianSparse() const {
+    // Assemble sparse Jacobian via triplet list — avoids allocating dense zeros.
+    // Each constraint's fillJacobianBlock still produces a dense sub-block,
+    // but we only extract the nonzero entries into the sparse matrix.
+    std::vector<Triplet> triplets;
+    triplets.reserve(total_constraints_ * 8);  // conservative estimate
+
+    int row = 0;
+    for (const auto& cs : constraint_sets_) {
+        for (const auto& vs : cs->linkedVariables()) {
+            MatX block = MatX::Zero(cs->size(), vs->size());
+            cs->fillJacobianBlock(vs->name(), block);
+            const int col0 = vs->startIndex();
+            for (int i = 0; i < cs->size(); ++i) {
+                for (int j = 0; j < vs->size(); ++j) {
+                    if (block(i, j) != Scalar(0)) {
+                        triplets.emplace_back(row + i, col0 + j, block(i, j));
+                    }
+                }
+            }
+        }
+        row += cs->size();
+    }
+
+    SpMatX jac(total_constraints_, total_vars_);
+    jac.setFromTriplets(triplets.begin(), triplets.end());
+    return jac;
+}
+
 Scalar NLPProblem::totalCost() const {
     Scalar total = 0;
     for (const auto& ct : cost_terms_) {

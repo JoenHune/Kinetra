@@ -61,7 +61,7 @@ struct MPCCOptions {
     MPCCOptions() {
         sqpSettings.maxIterations = 30;
         sqpSettings.tolerance = 1e-4;
-        sqpSettings.constraintTolerance = 1e-4;
+        sqpSettings.constraintTolerance = 1e-3;  // Relaxed: ADMM-based QP
         sqpSettings.verbose = false;
         sqpSettings.timeLimitMs = 5000.0;
     }

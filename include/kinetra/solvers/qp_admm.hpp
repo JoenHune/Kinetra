@@ -7,6 +7,9 @@
 //
 // Solves:  min  0.5 * x' Q x + c' x
 //          s.t. lb <= A x <= ub
+//
+// Supports sparse A matrix for efficient matrix-vector products when the
+// constraint matrix has low density (typical for trajectory optimisation).
 
 #pragma once
 
@@ -47,14 +50,21 @@ struct QPResult {
 ///      b. z-update:  project onto [lb, ub]
 ///      c. y-update:  dual variable update
 ///      d. Check convergence (primal + dual residual)
+///
+/// Two setup overloads:
+///   - Dense A: setup(Q, c, A_dense, lb, ub)
+///   - Sparse A: setup(Q, c, A_sparse, lb, ub)  — faster for low-density A
 class QPSolverADMM {
 public:
     QPSolverADMM() = default;
     explicit QPSolverADMM(QPSettings settings) : settings_(std::move(settings)) {}
 
-    /// Setup the QP problem. Performs matrix factorization.
-    /// Returns false if the problem is malformed.
+    /// Setup with dense constraint matrix.
     bool setup(const MatX& Q, const VecX& c, const MatX& A,
+               const VecX& lb, const VecX& ub);
+
+    /// Setup with sparse constraint matrix (preferred for structured problems).
+    bool setup(const MatX& Q, const VecX& c, const SpMatX& A,
                const VecX& lb, const VecX& ub);
 
     /// Solve the QP. Call setup() first.
@@ -76,8 +86,9 @@ private:
     QPSettings settings_;
 
     // Problem data
-    MatX Q_, A_;
-    MatX AT_;  // A transposed — cached to avoid recomputation
+    MatX Q_;
+    SpMatX A_sp_;      // Sparse A — always stored as sparse
+    SpMatX AT_sp_;     // A transposed (sparse)
     VecX c_, lb_, ub_;
     int n_{0};  // number of variables
     int m_{0};  // number of constraints
@@ -87,12 +98,13 @@ private:
     VecX z_prev_;
 
     // Cached matrices for efficient ADMM
-    MatX ATA_;          // A' * A — precomputed once in setup()
+    MatX ATA_;          // A' * A — stored dense (added to dense Q anyway)
     MatX kkt_factor_;   // Q + sigma*I + rho*ATA — for LDLT
     Scalar cached_rho_{0}; // rho used in last factorization
     bool is_setup_{false};
 
     // Internal helpers
+    bool setupInternal();  // Common setup after A_sp_ is populated
     void factorizeKKT();
     void projectOntoBox(VecX& z, const VecX& lb, const VecX& ub) const;
     bool updateRho(Scalar primal_res, Scalar dual_res);

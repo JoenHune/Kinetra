@@ -190,6 +190,9 @@ public:
     /// Full Jacobian of constraints w.r.t. variables
     [[nodiscard]] MatX constraintJacobian() const;
 
+    /// Sparse Jacobian of constraints w.r.t. variables (triplet assembly)
+    [[nodiscard]] SpMatX constraintJacobianSparse() const;
+
     /// Total cost (sum of all cost terms)
     [[nodiscard]] Scalar totalCost() const;
 

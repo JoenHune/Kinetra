@@ -7,6 +7,8 @@
 
 namespace kinetra::solvers {
 
+// ─── Dense A overload: convert to sparse and delegate ────────────────────────
+
 bool QPSolverADMM::setup(const MatX& Q, const VecX& c, const MatX& A,
                           const VecX& lb, const VecX& ub) {
     n_ = static_cast<int>(Q.rows());
@@ -17,23 +19,48 @@ bool QPSolverADMM::setup(const MatX& Q, const VecX& c, const MatX& A,
         return false;
     }
 
-    Q_ = Q; c_ = c; A_ = A; lb_ = lb; ub_ = ub;
+    Q_ = Q; c_ = c; lb_ = lb; ub_ = ub;
+    A_sp_ = A.sparseView();
+    A_sp_.makeCompressed();
+    return setupInternal();
+}
 
+// ─── Sparse A overload ──────────────────────────────────────────────────────
+
+bool QPSolverADMM::setup(const MatX& Q, const VecX& c, const SpMatX& A,
+                          const VecX& lb, const VecX& ub) {
+    n_ = static_cast<int>(Q.rows());
+    m_ = static_cast<int>(A.rows());
+
+    if (Q.cols() != n_ || c.size() != n_ || A.cols() != n_ ||
+        lb.size() != m_ || ub.size() != m_) {
+        return false;
+    }
+
+    Q_ = Q; c_ = c; lb_ = lb; ub_ = ub;
+    A_sp_ = A;
+    A_sp_.makeCompressed();
+    return setupInternal();
+}
+
+// ─── Common setup ───────────────────────────────────────────────────────────
+
+bool QPSolverADMM::setupInternal() {
     // Initialize ADMM variables
     x_ = VecX::Zero(n_);
     z_ = VecX::Zero(m_);
     y_ = VecX::Zero(m_);
     z_prev_ = z_;
 
-    // Precompute A'A once — this is the key performance optimization.
-    // Avoids O(n²m) recomputation on every rho update.
-    ATA_ = A_.transpose() * A_;
+    // Precompute transpose (sparse)
+    AT_sp_ = SpMatX(A_sp_.transpose());
 
-    // Precompute and cache A transpose for efficient inner loop
-    AT_ = A_.transpose();
+    // Precompute A'A as dense (it's added to the dense Q matrix anyway).
+    // For the MPCC problem (n=124, m=207, ~2% density in A), this is still
+    // fast because the sparse × sparse product exploits structure.
+    ATA_ = MatX(AT_sp_ * A_sp_);
 
     // Auto-tune initial rho based on problem scaling
-    // Heuristic: rho ≈ trace(Q) / (n * trace(A'A)/m) for balanced convergence
     if (settings_.rho <= Scalar(0.1) + Scalar(1e-12)) {
         Scalar trQ = Q_.trace();
         Scalar trATA = ATA_.trace();
@@ -64,12 +91,12 @@ QPResult QPSolverADMM::solve() {
 
     for (int iter = 0; iter < settings_.maxIterations; ++iter) {
         // ── x-update: solve (Q + sigma*I + rho*A'A) x = -c + A'(rho*z - y) + sigma*x
-        VecX rhs = -c_ + AT_ * (settings_.rho * z_ - y_) + settings_.sigma * x_;
+        VecX rhs = -c_ + AT_sp_ * (settings_.rho * z_ - y_) + settings_.sigma * x_;
         x_ = ldlt.solve(rhs);
 
         // ── z-update with relaxation
         z_prev_ = z_;
-        VecX ax = A_ * x_;
+        VecX ax = A_sp_ * x_;
         VecX z_hat = settings_.alpha * ax + (1 - settings_.alpha) * z_prev_
                      + y_ / settings_.rho;
         z_ = z_hat;
@@ -84,7 +111,7 @@ QPResult QPSolverADMM::solve() {
             Scalar primal_norm = primal_res.norm();
 
             VecX dz = z_ - z_prev_;
-            Scalar dual_norm = (settings_.rho * AT_ * dz).norm();
+            Scalar dual_norm = (settings_.rho * (AT_sp_ * dz)).norm();
 
             Scalar eps_primal = settings_.absTolerance * std::sqrt(static_cast<Scalar>(m_))
                                 + settings_.relTolerance * std::max(ax.norm(), z_.norm());

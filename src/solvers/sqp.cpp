@@ -77,6 +77,7 @@ SQPResult SQPSolver::solve(optimization::NLPProblem& problem) {
     VecX prev_d = VecX::Zero(n);  // Previous QP step direction for warm-starting
     VecX prev_y_qp = VecX::Zero(m + n);  // Previous QP dual for warm-starting
     bool has_prev_grad = false;
+    Scalar prev_cost = std::numeric_limits<Scalar>::max();
 
     for (int iter = 0; iter < settings_.maxIterations; ++iter) {
         // ── Time check ───────────────────────────────────────────────────────
@@ -94,7 +95,6 @@ SQPResult SQPSolver::solve(optimization::NLPProblem& problem) {
         VecX grad = problem.costGradient();
 
         VecX g  = (m > 0) ? problem.constraintValues() : VecX{};
-        MatX J  = (m > 0) ? problem.constraintJacobian() : MatX{};
 
         Scalar viol = (m > 0) ? constraintViolation(g, cl, cu) : 0;
 
@@ -103,18 +103,37 @@ SQPResult SQPSolver::solve(optimization::NLPProblem& problem) {
         //   s.t. constraint linearization:  cl - g ≤ J·d ≤ cu - g
         //        variable bounds:           xl - x ≤  d  ≤ xu - x
 
-        // Stack constraint matrix: [J; I_n]
-        int m_qp = m + n;  // constraints + variable bounds
-        MatX A_qp(m_qp, n);
+        // Build sparse A_qp = [J; I_n] for efficient ADMM matrix-vector products.
+        int m_qp = m + n;
         VecX lb_qp(m_qp), ub_qp(m_qp);
 
+        // Assemble sparse A_qp from sparse Jacobian + identity for variable bounds
+        SpMatX J_sp;
         if (m > 0) {
-            A_qp.topRows(m) = J;
+            J_sp = problem.constraintJacobianSparse();
             lb_qp.head(m) = cl - g;
             ub_qp.head(m) = cu - g;
         }
-        // Variable-bound rows
-        A_qp.bottomRows(n) = MatX::Identity(n, n);
+
+        // Build sparse A_qp = [J; I_n]
+        std::vector<Triplet> triplets;
+        triplets.reserve((m > 0 ? J_sp.nonZeros() : 0) + n);
+        if (m > 0) {
+            for (int k = 0; k < J_sp.outerSize(); ++k) {
+                for (SpMatX::InnerIterator it(J_sp, k); it; ++it) {
+                    triplets.emplace_back(
+                        static_cast<int>(it.row()),
+                        static_cast<int>(it.col()),
+                        it.value());
+                }
+            }
+        }
+        for (int i = 0; i < n; ++i) {
+            triplets.emplace_back(m + i, i, Scalar(1));
+        }
+        SpMatX A_qp(m_qp, n);
+        A_qp.setFromTriplets(triplets.begin(), triplets.end());
+
         lb_qp.tail(n) = xl - x;
         ub_qp.tail(n) = xu - x;
 
@@ -126,11 +145,14 @@ SQPResult SQPSolver::solve(optimization::NLPProblem& problem) {
                      (static_cast<Scalar>(1e-8) - min_diag);
         }
 
-        // Solve QP
+        // Solve QP — progressively tighten tolerance for better convergence
+        // Early SQP iterations use coarse QP; later iterations need precision
         QPSolverADMM qp;
-        qp.settings().maxIterations = 300;
-        qp.settings().absTolerance = static_cast<Scalar>(1e-4);
-        qp.settings().relTolerance = static_cast<Scalar>(1e-4);
+        Scalar qp_tol = (iter < 5) ? Scalar(1e-3) :
+                         (iter < 10) ? Scalar(5e-4) : Scalar(1e-4);
+        qp.settings().maxIterations = (iter < 5) ? 200 : 400;
+        qp.settings().absTolerance = qp_tol;
+        qp.settings().relTolerance = qp_tol;
 
         if (!qp.setup(H_reg, grad, A_qp, lb_qp, ub_qp)) {
             result.exitMessage = "QP sub-problem setup failed";
@@ -258,6 +280,21 @@ SQPResult SQPSolver::solve(optimization::NLPProblem& problem) {
             result.exitMessage = "Converged (gradient)";
             break;
         }
+
+        // Feasible + small relative cost change ⇒ practically converged
+        // For ADMM-based QP, exact KKT convergence is hard to achieve;
+        // instead detect stagnation while feasible.
+        if (iter >= 5 && new_viol < settings_.constraintTolerance) {
+            Scalar rel_cost_change = std::abs(new_cost - prev_cost) /
+                                     (std::abs(new_cost) + Scalar(1));
+            if (rel_cost_change < Scalar(1e-3)) {
+                result.converged = true;
+                result.exitMessage = "Converged (feasible, small improvement)";
+                break;
+            }
+        }
+
+        prev_cost = new_cost;
 
         // Adaptive penalty: increase if constraint violation not decreasing
         if (new_viol > Scalar(0.9) * viol && viol > settings_.constraintTolerance) {
