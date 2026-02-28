@@ -109,21 +109,16 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DKINETRA_USE_FLOAT=ON \
             -DKINETRA_BUILD_TESTS=ON \
-            -DKINETRA_BUILD_EXAMPLES=ON
+            -DKINETRA_BUILD_EXAMPLES=ON \
+            -DCMAKE_CROSSCOMPILING_EMULATOR="qemu-arm-static;-L;/usr/arm-linux-gnueabihf"
 
       - name: Build (cross)
         run: cmake --build build-arm --parallel
 
       - name: Test via QEMU
         run: |
-          # Run a subset of tests under QEMU user-mode emulation
           cd build-arm
-          for test_bin in tests/kinetra_test_*; do
-            if [ -f "$test_bin" ]; then
-              echo "--- Running $test_bin ---"
-              qemu-arm-static -L /usr/arm-linux-gnueabihf "$test_bin" || true
-            fi
-          done
+          ctest --output-on-failure --timeout 120 || true
 
       - name: Report binary sizes
         run: |

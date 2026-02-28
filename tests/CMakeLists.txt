@@ -34,7 +34,11 @@ target_include_directories(kinetra_tests PRIVATE
 )
 
 include(GoogleTest)
-gtest_discover_tests(kinetra_tests)
+if(CMAKE_CROSSCOMPILING)
+    gtest_discover_tests(kinetra_tests DISCOVERY_MODE PRE_TEST)
+else()
+    gtest_discover_tests(kinetra_tests)
+endif()
 
 # ─── Integration Tests ────────────────────────────────────────────────────────
 add_executable(kinetra_integration_tests
@@ -44,4 +48,8 @@ target_link_libraries(kinetra_integration_tests PRIVATE
     kinetra
     GTest::gtest_main
 )
-gtest_discover_tests(kinetra_integration_tests)
+if(CMAKE_CROSSCOMPILING)
+    gtest_discover_tests(kinetra_integration_tests DISCOVERY_MODE PRE_TEST)
+else()
+    gtest_discover_tests(kinetra_integration_tests)
+endif()
