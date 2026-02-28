@@ -52,6 +52,10 @@ public:
     /// Signed distance to nearest obstacle (positive = free)
     [[nodiscard]] Scalar signedDistance(const Vec2& point) const;
 
+    /// Analytical SDF gradient via central differences on the distance grid.
+    /// Returns (∂sdf/∂x, ∂sdf/∂y).  Cost: two grid look-ups per axis.
+    [[nodiscard]] Vec2 sdfGradient(const Vec2& point) const;
+
     /// Check if segment is collision-free (Bresenham line + buffer)
     [[nodiscard]] bool isSegmentFree(const Vec2& from, const Vec2& to) const;
 

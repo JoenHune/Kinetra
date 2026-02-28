@@ -70,6 +70,48 @@ Scalar OccupancyGrid2D::signedDistance(const Vec2& point) const {
     return distance_field_[static_cast<std::size_t>(idx(gx, gy))];
 }
 
+Vec2 OccupancyGrid2D::sdfGradient(const Vec2& point) const {
+    if (distance_field_dirty_) {
+        const_cast<OccupancyGrid2D*>(this)->recomputeDistanceField();
+    }
+    int gx = worldToGridX(point.x());
+    int gy = worldToGridY(point.y());
+    if (!inBounds(gx, gy)) return Vec2::Zero();
+
+    // Central differences on the distance field grid
+    Scalar dsd_dx = 0, dsd_dy = 0;
+
+    if (inBounds(gx - 1, gy) && inBounds(gx + 1, gy)) {
+        dsd_dx = (distance_field_[static_cast<std::size_t>(idx(gx + 1, gy))]
+                - distance_field_[static_cast<std::size_t>(idx(gx - 1, gy))])
+                / (Scalar(2) * resolution_);
+    } else if (inBounds(gx + 1, gy)) {
+        dsd_dx = (distance_field_[static_cast<std::size_t>(idx(gx + 1, gy))]
+                - distance_field_[static_cast<std::size_t>(idx(gx, gy))])
+                / resolution_;
+    } else if (inBounds(gx - 1, gy)) {
+        dsd_dx = (distance_field_[static_cast<std::size_t>(idx(gx, gy))]
+                - distance_field_[static_cast<std::size_t>(idx(gx - 1, gy))])
+                / resolution_;
+    }
+
+    if (inBounds(gx, gy - 1) && inBounds(gx, gy + 1)) {
+        dsd_dy = (distance_field_[static_cast<std::size_t>(idx(gx, gy + 1))]
+                - distance_field_[static_cast<std::size_t>(idx(gx, gy - 1))])
+                / (Scalar(2) * resolution_);
+    } else if (inBounds(gx, gy + 1)) {
+        dsd_dy = (distance_field_[static_cast<std::size_t>(idx(gx, gy + 1))]
+                - distance_field_[static_cast<std::size_t>(idx(gx, gy))])
+                / resolution_;
+    } else if (inBounds(gx, gy - 1)) {
+        dsd_dy = (distance_field_[static_cast<std::size_t>(idx(gx, gy))]
+                - distance_field_[static_cast<std::size_t>(idx(gx, gy - 1))])
+                / resolution_;
+    }
+
+    return Vec2(dsd_dx, dsd_dy);
+}
+
 bool OccupancyGrid2D::isSegmentFree(const Vec2& from, const Vec2& to) const {
     // Bresenham-like line traversal
     int x0 = worldToGridX(from.x()), y0 = worldToGridY(from.y());

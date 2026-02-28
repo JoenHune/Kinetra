@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include "kinetra/solvers/riccati_solver.hpp"
+
 namespace kinetra::planners {
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -467,6 +469,11 @@ MPCCResult MPCC<Model>::solve(const PlanningProblem& problem,
     // Find initial progress along reference path
     Scalar s_init = Scalar(0);
 
+    // ── Dispatch to Riccati or NLP-based solve ───────────────────────────
+    if (options_.useRiccati) {
+        return solveRiccati(x0, s_init, grid);
+    }
+
     // Build and solve NLP
     auto nlp = buildNLP(x0, s_init, &grid);
     initialiseVariables(nlp, x0, s_init);
@@ -679,6 +686,451 @@ template <typename Model>
     requires LinearizableModel<Model>
 void MPCC<Model>::reset() {
     // Nothing to reset for single-shot solve
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// GN-SQP with Riccati QP solve  (Phase-1 performance upgrade)
+//
+// Exploits the OCP block-banded structure of the MPCC formulation:
+//   – Augmented state  x̃_k = [x_k; s_k]       ∈ ℝ^(nx+1)
+//   – Augmented control ũ_k = [u_k; δs_k]      ∈ ℝ^(nu+1)
+//   – Dynamics: [f(x_k,u_k,dt); s_k + δs_k]
+//
+// Per SQP iteration the QP sub-problem is solved via backward Riccati
+// recursion in O(N · ñx³) instead of O((N·ñx)³) with dense ADMM.
+// ═════════════════════════════════════════════════════════════════════════════
+
+template <typename Model>
+    requires LinearizableModel<Model>
+MPCCResult MPCC<Model>::solveRiccati(
+    const StateType& x0, Scalar s_init,
+    const collision::OccupancyGrid2D& grid) const {
+
+    using SteadyClock = std::chrono::steady_clock;
+    auto t_start = SteadyClock::now();
+
+    const int N  = options_.horizon;
+    constexpr int nx  = static_cast<int>(kStateDim);
+    constexpr int nu  = static_cast<int>(kControlDim);
+    constexpr int anx = nx + 1;   // augmented state  (+progress)
+    constexpr int anu = nu + 1;   // augmented control (+progress rate)
+    const Scalar dt = options_.dt;
+    const Scalar S  = refPath_.totalLength();
+
+    // ── 1. Initialise trajectory along reference path ────────────────────
+    std::vector<VecX> xa(static_cast<std::size_t>(N + 1), VecX::Zero(anx));
+    std::vector<VecX> ua(static_cast<std::size_t>(N),     VecX::Zero(anu));
+
+    Scalar ds = std::min((S - s_init) / Scalar(N),
+                         options_.maxProgressRate * dt);
+
+    // First state = problem start (not the reference spline value)
+    for (int i = 0; i < nx; ++i) xa[0][i] = x0[i];
+    xa[0][nx] = s_init;
+
+    for (int k = 1; k <= N; ++k) {
+        Scalar sk = s_init + Scalar(k) * ds;
+        sk = clamp(sk, Scalar(0), S);
+        Vec3 ref = refPath_.evaluate(sk);
+        xa[static_cast<std::size_t>(k)][0] = ref[0];
+        xa[static_cast<std::size_t>(k)][1] = ref[1];
+        xa[static_cast<std::size_t>(k)][2] = ref[2];
+        // Higher-order states (v, ω, …) stay at zero
+        xa[static_cast<std::size_t>(k)][nx] = sk;
+    }
+    for (int k = 0; k < N; ++k) {
+        ua[static_cast<std::size_t>(k)][nu] = ds;   // progress rate
+    }
+
+    // Pre-fetch control bounds (constant across iteration)
+    auto clb = model_.controlLowerBound();
+    auto cub = model_.controlUpperBound();
+
+    // ── 2. Cost / defect evaluation lambdas ──────────────────────────────
+
+    auto evalCost = [&](const std::vector<VecX>& x,
+                        const std::vector<VecX>& u) -> Scalar {
+        Scalar cost = 0;
+        for (int k = 0; k <= N; ++k) {
+            const auto uk = static_cast<std::size_t>(k);
+            Scalar sk = x[uk][nx];
+            Vec3 ref = refPath_.evaluate(sk);
+            Vec2 tan = refPath_.tangent(sk);
+            Vec2 nor = refPath_.normal(sk);
+            Vec2 dp(x[uk][0] - ref[0], x[uk][1] - ref[1]);
+            Scalar ec  = nor.dot(dp);
+            Scalar el  = tan.dot(dp);
+            Scalar eth = normalizeAngle(x[uk][2] - ref[2]);
+            cost += options_.wContour * ec * ec
+                  + options_.wLag     * el * el
+                  + options_.wHeading * eth * eth;
+            // Obstacle
+            Vec2 pk(x[uk][0], x[uk][1]);
+            Scalar sd = grid.signedDistance(pk);
+            if (sd < options_.safeDistance) {
+                Scalar v = options_.safeDistance - sd;
+                cost += options_.wObstacle * v * v;
+            }
+        }
+        for (int k = 0; k < N; ++k) {
+            const auto uk = static_cast<std::size_t>(k);
+            for (int i = 0; i < nu; ++i)
+                cost += options_.wControl * u[uk][i] * u[uk][i];
+        }
+        cost -= options_.wProgress * x[static_cast<std::size_t>(N)][nx];
+        return cost;
+    };
+
+    auto evalDefect = [&](const std::vector<VecX>& x,
+                          const std::vector<VecX>& u) -> Scalar {
+        Scalar def = 0;
+        for (int k = 0; k < N; ++k) {
+            const auto uk = static_cast<std::size_t>(k);
+            StateType xk;
+            ControlType uctl;
+            for (int i = 0; i < nx; ++i) xk[i] = x[uk][i];
+            for (int i = 0; i < nu; ++i) uctl[i] = u[uk][i];
+            auto xnext = model_.dynamics(xk, uctl, dt);
+            for (int i = 0; i < nx; ++i)
+                def += std::abs(xnext[i] - x[uk + 1][i]);
+            def += std::abs(x[uk][nx] + u[uk][nu] - x[uk + 1][nx]);
+        }
+        return def;
+    };
+
+    // ── 3. SQP outer loop ────────────────────────────────────────────────
+    int sqpIter = 0;
+    bool converged = false;
+    Scalar prevMerit = std::numeric_limits<Scalar>::max();
+    const int maxIter = options_.sqpSettings.maxIterations;
+    const Scalar tolStep = options_.sqpSettings.tolerance;
+    const Scalar tolCon  = options_.sqpSettings.constraintTolerance;
+
+    for (sqpIter = 0; sqpIter < maxIter; ++sqpIter) {
+        // Time limit
+        double elapsed = std::chrono::duration<double, std::milli>(
+            SteadyClock::now() - t_start).count();
+        if (elapsed > options_.sqpSettings.timeLimitMs) break;
+
+        // ── 3a. Build OCP QP stages ─────────────────────────────────
+        solvers::OCPProblem ocp;
+        ocp.nx = anx;
+        ocp.nu = anu;
+        ocp.N  = N;
+        ocp.stages.resize(static_cast<std::size_t>(N));
+        ocp.dx_0 = VecX::Zero(anx);   // initial state is fixed
+
+        for (int k = 0; k < N; ++k) {
+            const auto uk = static_cast<std::size_t>(k);
+            auto& stg = ocp.stages[uk];
+
+            StateType xk;
+            ControlType uctl;
+            for (int i = 0; i < nx; ++i) xk[i] = xa[uk][i];
+            for (int i = 0; i < nu; ++i) uctl[i] = ua[uk][i];
+            Scalar sk  = xa[uk][nx];
+
+            // ── Linearised dynamics ─────────────────────────────────
+            auto A_r = model_.jacobianState(xk, uctl, dt);
+            auto B_r = model_.jacobianControl(xk, uctl, dt);
+            auto x_pred = model_.dynamics(xk, uctl, dt);
+
+            stg.A = MatX::Zero(anx, anx);
+            stg.A.topLeftCorner(nx, nx) = A_r;
+            stg.A(nx, nx) = Scalar(1);
+
+            stg.B = MatX::Zero(anx, anu);
+            stg.B.topLeftCorner(nx, nu) = B_r;
+            stg.B(nx, nu) = Scalar(1);
+
+            stg.c = VecX::Zero(anx);
+            for (int i = 0; i < nx; ++i)
+                stg.c[i] = x_pred[i] - xa[uk + 1][i];
+            stg.c[nx] = sk + ua[uk][nu] - xa[uk + 1][nx];
+
+            // ── GN Hessian from contouring cost ─────────────────────
+            Vec3 ref = refPath_.evaluate(sk);
+            Vec2 tan = refPath_.tangent(sk);
+            Vec2 nor = refPath_.normal(sk);
+            Scalar kappa    = refPath_.curvature(sk);
+            Scalar thdot    = refPath_.thetaDot(sk);
+            Scalar pdot_n   = tan.norm();
+
+            Vec2 dp(xa[uk][0] - ref[0], xa[uk][1] - ref[1]);
+            Scalar ec  = nor.dot(dp);
+            Scalar el  = tan.dot(dp);
+            Scalar eth = normalizeAngle(xa[uk][2] - ref[2]);
+
+            // Residual r = [√wc ec, √wl el, √wθ eθ]
+            Eigen::Matrix<Scalar, 3, 1> res;
+            Scalar swc = std::sqrt(options_.wContour);
+            Scalar swl = std::sqrt(options_.wLag);
+            Scalar swh = std::sqrt(options_.wHeading);
+            res[0] = swc * ec;
+            res[1] = swl * el;
+            res[2] = swh * eth;
+
+            // Jacobian J_r (3 × anx)
+            MatX Jr = MatX::Zero(3, anx);
+            Jr(0, 0) = swc * nor.x();
+            Jr(0, 1) = swc * nor.y();
+            Jr(1, 0) = swl * tan.x();
+            Jr(1, 1) = swl * tan.y();
+            Jr(2, 2) = swh;
+
+            // ∂errors/∂s
+            Scalar dec_ds = -nor.dot(tan * pdot_n) - kappa * tan.dot(dp);
+            Scalar del_ds = -tan.dot(tan * pdot_n) + kappa * nor.dot(dp);
+            Scalar deth_ds = -thdot;
+            Jr(0, nx) = swc * dec_ds;
+            Jr(1, nx) = swl * del_ds;
+            Jr(2, nx) = swh * deth_ds;
+
+            stg.Q = Scalar(2) * Jr.transpose() * Jr;    // anx × anx
+            stg.q = Scalar(2) * Jr.transpose() * res;   // anx
+
+            // ── Obstacle contribution ───────────────────────────────
+            Vec2 pk(xa[uk][0], xa[uk][1]);
+            Scalar sd = grid.signedDistance(pk);
+            if (sd < options_.safeDistance) {
+                Scalar viol = options_.safeDistance - sd;
+                Vec2 gsd   = grid.sdfGradient(pk);
+                Scalar sw   = std::sqrt(options_.wObstacle);
+                VecX Jb = VecX::Zero(anx);
+                Jb[0] = -sw * gsd.x();
+                Jb[1] = -sw * gsd.y();
+                stg.Q += Scalar(2) * Jb * Jb.transpose();
+                stg.q += Scalar(2) * sw * viol * Jb;
+            }
+
+            // Regularise Q
+            stg.Q.diagonal().array() += Scalar(1e-6);
+
+            // ── Control cost ────────────────────────────────────────
+            stg.R = Scalar(2) * options_.wControl
+                  * MatX::Identity(anu, anu);
+            stg.R(nu, nu) = Scalar(1e-4);  // small reg for progress rate
+            stg.r = VecX::Zero(anu);
+            for (int i = 0; i < nu; ++i)
+                stg.r[i] = Scalar(2) * options_.wControl * ua[uk][i];
+
+            // ── Box constraints (correction space) ──────────────────
+            stg.u_lb = VecX(anu);
+            stg.u_ub = VecX(anu);
+            for (int i = 0; i < nu; ++i) {
+                stg.u_lb[i] = clb[i] - ua[uk][i];
+                stg.u_ub[i] = cub[i] - ua[uk][i];
+            }
+            stg.u_lb[nu] = -ua[uk][nu];
+            stg.u_ub[nu] = options_.maxProgressRate * dt - ua[uk][nu];
+        }
+
+        // ── Terminal cost ────────────────────────────────────────────
+        {
+            const auto uN = static_cast<std::size_t>(N);
+            Scalar sN = xa[uN][nx];
+            Vec3 refN = refPath_.evaluate(sN);
+            Vec2 tanN = refPath_.tangent(sN);
+            Vec2 norN = refPath_.normal(sN);
+            Scalar kN     = refPath_.curvature(sN);
+            Scalar thdotN = refPath_.thetaDot(sN);
+            Scalar pdotN  = tanN.norm();
+
+            Vec2 dpN(xa[uN][0] - refN[0], xa[uN][1] - refN[1]);
+            Scalar ecN  = norN.dot(dpN);
+            Scalar elN  = tanN.dot(dpN);
+            Scalar ethN = normalizeAngle(xa[uN][2] - refN[2]);
+
+            Scalar swc = std::sqrt(options_.wContour);
+            Scalar swl = std::sqrt(options_.wLag);
+            Scalar swh = std::sqrt(options_.wHeading);
+
+            Eigen::Matrix<Scalar, 3, 1> resN;
+            resN[0] = swc * ecN;
+            resN[1] = swl * elN;
+            resN[2] = swh * ethN;
+
+            MatX JrN = MatX::Zero(3, anx);
+            JrN(0, 0) = swc * norN.x();
+            JrN(0, 1) = swc * norN.y();
+            JrN(1, 0) = swl * tanN.x();
+            JrN(1, 1) = swl * tanN.y();
+            JrN(2, 2) = swh;
+
+            Scalar decN = -norN.dot(tanN * pdotN) - kN * tanN.dot(dpN);
+            Scalar delN = -tanN.dot(tanN * pdotN) + kN * norN.dot(dpN);
+            Scalar dethN = -thdotN;
+            JrN(0, nx) = swc * decN;
+            JrN(1, nx) = swl * delN;
+            JrN(2, nx) = swh * dethN;
+
+            ocp.Q_N = Scalar(2) * JrN.transpose() * JrN;
+            ocp.q_N = Scalar(2) * JrN.transpose() * resN;
+            ocp.q_N[nx] -= options_.wProgress;  // progress reward
+
+            // Obstacle at terminal
+            Vec2 pN(xa[uN][0], xa[uN][1]);
+            Scalar sdN = grid.signedDistance(pN);
+            if (sdN < options_.safeDistance) {
+                Scalar vN = options_.safeDistance - sdN;
+                Vec2 gsN  = grid.sdfGradient(pN);
+                Scalar sw = std::sqrt(options_.wObstacle);
+                VecX JbN = VecX::Zero(anx);
+                JbN[0] = -sw * gsN.x();
+                JbN[1] = -sw * gsN.y();
+                ocp.Q_N += Scalar(2) * JbN * JbN.transpose();
+                ocp.q_N += Scalar(2) * sw * vN * JbN;
+            }
+            ocp.Q_N.diagonal().array() += Scalar(1e-6);
+        }
+
+        // ── 3b. Solve QP via Riccati ────────────────────────────────
+        solvers::RiccatiSolver riccati;
+        auto qpSol = riccati.solve(ocp);
+
+        // ── 3c. Line search ─────────────────────────────────────────
+        Scalar mu    = Scalar(10);
+        Scalar cost0 = evalCost(xa, ua);
+        Scalar def0  = evalDefect(xa, ua);
+        Scalar merit0 = cost0 + mu * def0;
+
+        Scalar alpha = 1;
+        bool   ls_ok = false;
+        std::vector<VecX> xa_try(static_cast<std::size_t>(N + 1));
+        std::vector<VecX> ua_try(static_cast<std::size_t>(N));
+
+        for (int ls = 0; ls < 10; ++ls) {
+            for (int k = 0; k <= N; ++k) {
+                const auto uk = static_cast<std::size_t>(k);
+                xa_try[uk] = xa[uk] + alpha * qpSol.dx[uk];
+                xa_try[uk][nx] = clamp(xa_try[uk][nx], Scalar(0), S);
+            }
+            for (int k = 0; k < N; ++k) {
+                const auto uk = static_cast<std::size_t>(k);
+                ua_try[uk] = ua[uk] + alpha * qpSol.du[uk];
+                ua_try[uk][nu] = clamp(ua_try[uk][nu], Scalar(0),
+                                       options_.maxProgressRate * dt);
+                for (int i = 0; i < nu; ++i)
+                    ua_try[uk][i] = clamp(ua_try[uk][i], clb[i], cub[i]);
+            }
+            Scalar merit_try = evalCost(xa_try, ua_try)
+                             + mu * evalDefect(xa_try, ua_try);
+            if (merit_try < merit0) { ls_ok = true; break; }
+            alpha *= Scalar(0.5);
+        }
+
+        if (!ls_ok) {                // accept a small step anyway
+            alpha = Scalar(0.05);
+            for (int k = 0; k <= N; ++k) {
+                const auto uk = static_cast<std::size_t>(k);
+                xa_try[uk] = xa[uk] + alpha * qpSol.dx[uk];
+                xa_try[uk][nx] = clamp(xa_try[uk][nx], Scalar(0), S);
+            }
+            for (int k = 0; k < N; ++k) {
+                const auto uk = static_cast<std::size_t>(k);
+                ua_try[uk] = ua[uk] + alpha * qpSol.du[uk];
+                ua_try[uk][nu] = clamp(ua_try[uk][nu], Scalar(0),
+                                       options_.maxProgressRate * dt);
+                for (int i = 0; i < nu; ++i)
+                    ua_try[uk][i] = clamp(ua_try[uk][i], clb[i], cub[i]);
+            }
+        }
+
+        // ── 3d. Accept step ─────────────────────────────────────────
+        Scalar step_norm = 0;
+        for (int k = 0; k <= N; ++k) {
+            const auto uk = static_cast<std::size_t>(k);
+            step_norm += (xa_try[uk] - xa[uk]).squaredNorm();
+        }
+        for (int k = 0; k < N; ++k) {
+            const auto uk = static_cast<std::size_t>(k);
+            step_norm += (ua_try[uk] - ua[uk]).squaredNorm();
+        }
+        step_norm = std::sqrt(step_norm);
+
+        xa = std::move(xa_try);
+        ua = std::move(ua_try);
+
+        // ── 3e. Convergence check ───────────────────────────────────
+        Scalar newMerit = evalCost(xa, ua) + mu * evalDefect(xa, ua);
+        Scalar newDef   = evalDefect(xa, ua);
+
+        if (step_norm < tolStep && newDef < tolCon) {
+            converged = true;  break;
+        }
+        if (sqpIter >= 3) {
+            Scalar rel = std::abs(newMerit - prevMerit)
+                       / (std::abs(newMerit) + Scalar(1));
+            if (rel < Scalar(1e-4) && newDef < tolCon) {
+                converged = true;  break;
+            }
+        }
+        prevMerit = newMerit;
+    }
+
+    // ── 4. Build MPCCResult ──────────────────────────────────────────────
+    auto t_end = SteadyClock::now();
+    double totalMs = std::chrono::duration<double, std::milli>(
+        t_end - t_start).count();
+
+    MPCCResult result;
+    Trajectory2D traj;
+    for (int k = 0; k <= N; ++k) {
+        const auto uk = static_cast<std::size_t>(k);
+        Waypoint2D wp;
+        wp.x = xa[uk][0];
+        wp.y = xa[uk][1];
+        wp.theta = xa[uk][2];
+        wp.t = Scalar(k) * dt;
+        traj.append(wp);
+    }
+
+    result.progressValues.resize(static_cast<std::size_t>(N + 1));
+    for (int k = 0; k <= N; ++k)
+        result.progressValues[static_cast<std::size_t>(k)] =
+            xa[static_cast<std::size_t>(k)][nx];
+
+    result.contourErrors.resize(static_cast<std::size_t>(N + 1));
+    result.lagErrors.resize(static_cast<std::size_t>(N + 1));
+    result.headingErrors.resize(static_cast<std::size_t>(N + 1));
+    for (int k = 0; k <= N; ++k) {
+        const auto uk = static_cast<std::size_t>(k);
+        Scalar sk = xa[uk][nx];
+        Vec3 ref = refPath_.evaluate(sk);
+        Vec2 tan = refPath_.tangent(sk);
+        Vec2 nor = refPath_.normal(sk);
+        Vec2 dp(xa[uk][0] - ref[0], xa[uk][1] - ref[1]);
+        result.contourErrors[uk] = nor.dot(dp);
+        result.lagErrors[uk]     = tan.dot(dp);
+        result.headingErrors[uk] = normalizeAngle(xa[uk][2] - ref[2]);
+    }
+
+    result.controls.resize(static_cast<std::size_t>(N));
+    for (int k = 0; k < N; ++k) {
+        const auto uk = static_cast<std::size_t>(k);
+        VecX uout(kControlDim);
+        for (int i = 0; i < nu; ++i) uout[i] = ua[uk][i];
+        result.controls[uk] = uout;
+    }
+
+    auto& pr = result.planningResult;
+    pr.trajectory   = std::move(traj);
+    pr.solveTimeMs  = totalMs;
+    pr.iterations   = sqpIter + 1;
+    pr.cost         = evalCost(xa, ua);
+    pr.plannerName  = "MPCC";
+    pr.pathLength   = pr.trajectory.pathLength();
+    pr.maxCurvature = pr.trajectory.maxCurvature();
+    pr.smoothness   = pr.trajectory.smoothness();
+    pr.status       = converged ? SolveStatus::kSuccess
+                                : SolveStatus::kMaxIterations;
+
+    result.sqpIterations    = sqpIter + 1;
+    result.totalQPIterations = sqpIter + 1;  // 1 Riccati per SQP iter
+    result.finalCost        = pr.cost;
+    result.constraintViolation = evalDefect(xa, ua);
+
+    return result;
 }
 
 }  // namespace kinetra::planners

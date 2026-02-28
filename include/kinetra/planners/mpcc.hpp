@@ -58,6 +58,10 @@ struct MPCCOptions {
     // SQP solver settings
     solvers::SQPSettings sqpSettings;
 
+    /// Use Gauss-Newton SQP with Riccati QP solve (fast, O(N·nx³)).
+    /// When false, fall back to the generic dense SQP + ADMM pathway.
+    bool useRiccati{true};
+
     MPCCOptions() {
         sqpSettings.maxIterations = 30;
         sqpSettings.tolerance = 1e-4;
@@ -151,6 +155,10 @@ private:
     void initialiseVariables(optimization::NLPProblem& nlp,
                              const StateType& x0,
                              Scalar s_init) const;
+
+    // GN-SQP with Riccati QP solve — bypasses NLPProblem entirely
+    MPCCResult solveRiccati(const StateType& x0, Scalar s_init,
+                            const collision::OccupancyGrid2D& grid) const;
 };
 
 }  // namespace kinetra::planners

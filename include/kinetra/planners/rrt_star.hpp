@@ -15,6 +15,10 @@
 #include "kinetra/core/types.hpp"
 #include "kinetra/spaces/se2.hpp"
 
+namespace kinetra {
+class DubinsSpace;  // forward declaration
+}  // namespace kinetra
+
 namespace kinetra::planners {
 
 struct RRTStarOptions {
@@ -24,6 +28,13 @@ struct RRTStarOptions {
     Scalar rewireRadius{static_cast<Scalar>(2.0)};   // Radius for rewiring
     bool useKNearest{true};                           // Use k-nearest instead of radius
     double timeLimitMs{5000.0};
+
+    /// Enable Dubins steering for kinematically feasible paths.
+    /// When true, RRT* uses Dubins curves instead of straight-line
+    /// interpolation, producing paths that respect a minimum turning radius.
+    bool useDubinsSteering{false};
+    Scalar turningRadius{static_cast<Scalar>(1.0)};
+    Scalar dubinsCollisionStep{static_cast<Scalar>(0.1)};  // sampling step for path checking
 };
 
 /// Type-erased collision checker for 2D points
@@ -78,6 +89,8 @@ private:
     void rewire(int new_node, const std::vector<int>& neighbors,
                 const SE2Space& space);
     [[nodiscard]] Trajectory2D extractPath(int goal_node) const;
+    [[nodiscard]] Trajectory2D extractPathDubins(
+        int goal_node, const DubinsSpace& dubins) const;
 };
 
 }  // namespace kinetra::planners

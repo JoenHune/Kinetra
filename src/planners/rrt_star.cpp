@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "kinetra/planners/rrt_star.hpp"
+#include "kinetra/spaces/dubins.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <optional>
 
 namespace kinetra::planners {
 
@@ -20,6 +22,16 @@ PlanningResult RRTStar::solve(const PlanningProblem& problem) {
     SE2State start_state{problem.start.x, problem.start.y, problem.start.theta};
     SE2State goal_state{problem.goal.x, problem.goal.y, problem.goal.theta};
 
+    // ── Dubins space (created only when enabled) ─────────────────────────
+    std::optional<DubinsSpace> dubins;
+    if (options_.useDubinsSteering) {
+        dubins.emplace(options_.turningRadius,
+                       problem.environment.bounds_min.x(),
+                       problem.environment.bounds_max.x(),
+                       problem.environment.bounds_min.y(),
+                       problem.environment.bounds_max.y());
+    }
+
     // Initialize tree with start node
     reset();
     tree_.push_back(Node{start_state, -1, 0, {}});
@@ -29,6 +41,44 @@ PlanningResult RRTStar::solve(const PlanningProblem& problem) {
         [&](const Vec2&) { return true; };
     auto segment_check = segment_check_ ? segment_check_ :
         [&](const Vec2&, const Vec2&) { return true; };
+
+    // ── Dubins-aware helper lambdas ──────────────────────────────────────
+
+    // Distance between two SE2 states (Dubins or Euclidean)
+    auto edgeCost = [&](const SE2State& a, const SE2State& b) -> Scalar {
+        if (dubins) return dubins->distance(a, b);
+        return space.distance(a, b);
+    };
+
+    // Steer from `from` towards `to`, respecting stepSize
+    auto steerTo = [&](const SE2State& from,
+                       const SE2State& to) -> SE2State {
+        if (dubins) {
+            auto path = dubins->shortestPath(from, to);
+            if (!path) return from;
+            if (path->totalLength() <= options_.stepSize) return to;
+            Scalar t = options_.stepSize / path->totalLength();
+            return dubins->interpolate(from, to, t);
+        }
+        return steer(from, to, space);
+    };
+
+    // Check if the path from `from` to `to` is collision-free
+    auto isEdgeFree = [&](const SE2State& from,
+                          const SE2State& to) -> bool {
+        if (dubins) {
+            auto path = dubins->shortestPath(from, to);
+            if (!path) return false;
+            auto pts = dubins->samplePath(
+                from, *path, options_.dubinsCollisionStep);
+            for (const auto& p : pts) {
+                if (!point_check(p.position())) return false;
+            }
+            return true;
+        }
+        return point_check(to.position())
+            && segment_check(from.position(), to.position());
+    };
 
     int best_goal_node = -1;
     Scalar best_cost = constants::kInfinity;
@@ -51,32 +101,35 @@ PlanningResult RRTStar::solve(const PlanningProblem& problem) {
             rand_state = space.sampleUniform();
         }
 
-        // Find nearest node
+        // Find nearest node (SE2 Euclidean — fast lower bound for Dubins)
         int nearest_idx = nearest(rand_state, space);
         if (nearest_idx < 0) continue;
 
         // Steer towards sampled state
-        SE2State new_state = steer(tree_[static_cast<std::size_t>(nearest_idx)].state,
-                                    rand_state, space);
+        SE2State new_state = steerTo(
+            tree_[static_cast<std::size_t>(nearest_idx)].state, rand_state);
 
-        // Collision check
-        Vec2 from_pos = tree_[static_cast<std::size_t>(nearest_idx)].state.position();
-        Vec2 to_pos = new_state.position();
-        if (!point_check(to_pos) || !segment_check(from_pos, to_pos)) {
+        // Collision-aware edge check
+        if (!isEdgeFree(
+                tree_[static_cast<std::size_t>(nearest_idx)].state,
+                new_state)) {
             continue;
         }
 
-        // Compute cost
-        Scalar new_cost = tree_[static_cast<std::size_t>(nearest_idx)].cost
-                          + space.distance(tree_[static_cast<std::size_t>(nearest_idx)].state, new_state);
+        // Compute cost via actual edge metric
+        Scalar new_cost =
+            tree_[static_cast<std::size_t>(nearest_idx)].cost
+            + edgeCost(
+                  tree_[static_cast<std::size_t>(nearest_idx)].state,
+                  new_state);
 
-        // Find near neighbors for rewiring
+        // Find near neighbors for rewiring (SE2 distance for search)
         Scalar radius = options_.rewireRadius;
         if (options_.useKNearest) {
-            // Adaptive radius: r * (log(n)/n)^(1/d)
             auto n = static_cast<Scalar>(tree_.size());
             radius = options_.rewireRadius *
-                     std::pow(std::log(n + 1) / (n + 1), static_cast<Scalar>(1.0 / 3.0));
+                     std::pow(std::log(n + 1) / (n + 1),
+                              static_cast<Scalar>(1.0 / 3.0));
         }
         auto neighbors = nearNeighbors(new_state, space, radius);
 
@@ -84,10 +137,14 @@ PlanningResult RRTStar::solve(const PlanningProblem& problem) {
         int best_parent = nearest_idx;
         Scalar best_new_cost = new_cost;
         for (int nb : neighbors) {
-            Scalar nb_cost = tree_[static_cast<std::size_t>(nb)].cost
-                             + space.distance(tree_[static_cast<std::size_t>(nb)].state, new_state);
-            Vec2 nb_pos = tree_[static_cast<std::size_t>(nb)].state.position();
-            if (nb_cost < best_new_cost && segment_check(nb_pos, to_pos)) {
+            Scalar nb_cost =
+                tree_[static_cast<std::size_t>(nb)].cost
+                + edgeCost(tree_[static_cast<std::size_t>(nb)].state,
+                           new_state);
+            if (nb_cost < best_new_cost
+                && isEdgeFree(
+                       tree_[static_cast<std::size_t>(nb)].state,
+                       new_state)) {
                 best_parent = nb;
                 best_new_cost = nb_cost;
             }
@@ -96,13 +153,50 @@ PlanningResult RRTStar::solve(const PlanningProblem& problem) {
         // Add new node
         int new_idx = static_cast<int>(tree_.size());
         tree_.push_back(Node{new_state, best_parent, best_new_cost, {}});
-        tree_[static_cast<std::size_t>(best_parent)].children.push_back(new_idx);
+        tree_[static_cast<std::size_t>(best_parent)].children.push_back(
+            new_idx);
 
-        // Rewire neighbors
-        rewire(new_idx, neighbors, space);
+        // Rewire neighbors (with Dubins-aware collision check)
+        for (int nb : neighbors) {
+            if (nb == tree_[static_cast<std::size_t>(new_idx)].parent)
+                continue;
+
+            Scalar potential_cost =
+                tree_[static_cast<std::size_t>(new_idx)].cost
+                + edgeCost(
+                      tree_[static_cast<std::size_t>(new_idx)].state,
+                      tree_[static_cast<std::size_t>(nb)].state);
+
+            if (potential_cost <
+                tree_[static_cast<std::size_t>(nb)].cost) {
+                if (!isEdgeFree(
+                        tree_[static_cast<std::size_t>(new_idx)].state,
+                        tree_[static_cast<std::size_t>(nb)].state))
+                    continue;
+
+                // Remove nb from old parent's children
+                int old_parent =
+                    tree_[static_cast<std::size_t>(nb)].parent;
+                if (old_parent >= 0) {
+                    auto& children =
+                        tree_[static_cast<std::size_t>(old_parent)]
+                            .children;
+                    children.erase(
+                        std::remove(children.begin(), children.end(), nb),
+                        children.end());
+                }
+
+                // Rewire
+                tree_[static_cast<std::size_t>(nb)].parent = new_idx;
+                tree_[static_cast<std::size_t>(nb)].cost = potential_cost;
+                tree_[static_cast<std::size_t>(new_idx)]
+                    .children.push_back(nb);
+            }
+        }
 
         // Check if we reached the goal
-        if (space.distance(new_state, goal_state) < problem.options.goalTolerance) {
+        if (space.distance(new_state, goal_state) <
+            problem.options.goalTolerance) {
             if (best_new_cost < best_cost) {
                 best_goal_node = new_idx;
                 best_cost = best_new_cost;
@@ -110,14 +204,20 @@ PlanningResult RRTStar::solve(const PlanningProblem& problem) {
         }
     }
 
-    // Extract result
+    // ── Extract result ───────────────────────────────────────────────────
     auto end_time = Clock::now();
-    result.solveTimeMs = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+    result.solveTimeMs = std::chrono::duration<double, std::milli>(
+        end_time - start_time).count();
     result.iterations = static_cast<int>(tree_.size());
 
     if (best_goal_node >= 0) {
         result.status = SolveStatus::kSuccess;
-        result.trajectory = extractPath(best_goal_node);
+        if (dubins) {
+            result.trajectory =
+                extractPathDubins(best_goal_node, *dubins);
+        } else {
+            result.trajectory = extractPath(best_goal_node);
+        }
         result.cost = best_cost;
         result.pathLength = result.trajectory.pathLength();
     } else if (result.status != SolveStatus::kTimeout) {
@@ -221,6 +321,50 @@ Trajectory2D RRTStar::extractPath(int goal_node) const {
             waypoints[i].t = t;
         }
     }
+    return Trajectory2D(std::move(waypoints));
+}
+
+Trajectory2D RRTStar::extractPathDubins(
+    int goal_node, const DubinsSpace& dubins) const {
+
+    // Trace parent chain → node sequence (root → goal)
+    std::vector<int> chain;
+    int node = goal_node;
+    while (node >= 0) {
+        chain.push_back(node);
+        node = tree_[static_cast<std::size_t>(node)].parent;
+    }
+    std::reverse(chain.begin(), chain.end());
+
+    std::vector<Waypoint2D> waypoints;
+    Scalar t = 0;
+
+    for (std::size_t i = 0; i + 1 < chain.size(); ++i) {
+        const auto& from = tree_[static_cast<std::size_t>(chain[i])].state;
+        const auto& to   = tree_[static_cast<std::size_t>(chain[i + 1])].state;
+        auto path = dubins.shortestPath(from, to);
+        if (!path) {
+            // Fallback: straight-line
+            if (i == 0)
+                waypoints.push_back({from.x, from.y, from.theta, t});
+            waypoints.push_back({to.x, to.y, to.theta, t + Scalar(0.1)});
+            t += Scalar(0.1);
+            continue;
+        }
+        auto pts = dubins.samplePath(from, *path, Scalar(0.1));
+        std::size_t start_idx = (i == 0) ? 0 : 1;  // skip duplicate
+        for (std::size_t j = start_idx; j < pts.size(); ++j) {
+            waypoints.push_back({pts[j].x, pts[j].y, pts[j].theta, t});
+            t += Scalar(0.1);
+        }
+    }
+
+    // Handle single-node path
+    if (chain.size() == 1) {
+        const auto& s = tree_[static_cast<std::size_t>(chain[0])].state;
+        waypoints.push_back({s.x, s.y, s.theta, 0});
+    }
+
     return Trajectory2D(std::move(waypoints));
 }
 
