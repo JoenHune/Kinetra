@@ -33,10 +33,10 @@ ReferencePath makeCurvedPath() {
     int N = 20;
     for (int i = 0; i <= N; ++i) {
         Scalar t = static_cast<Scalar>(i) / static_cast<Scalar>(N);
-        Scalar angle = t * M_PI / 2;
+        Scalar angle = t * constants::kHalfPi;
         wps.push_back({
             std::sin(angle),
-            1.0 - std::cos(angle),
+            Scalar(1) - std::cos(angle),
             angle,
             t
         });

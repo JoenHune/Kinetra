@@ -121,8 +121,8 @@ static void BM_Profile_Dubins(benchmark::State& state) {
 
     for (auto _ : state) {
         for (int i = 0; i < 100; ++i) {
-            SE2State goal{static_cast<Scalar>(i) * 0.1, 3.0,
-                          constants::kPi * 0.5};
+            SE2State goal{static_cast<Scalar>(i) * Scalar(0.1), Scalar(3),
+                          constants::kPi * Scalar(0.5)};
             auto d = dubins.distance(start, goal);
             benchmark::DoNotOptimize(d);
         }
