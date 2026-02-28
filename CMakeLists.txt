@@ -55,6 +55,18 @@ set(EIGEN_BUILD_PKGCONFIG OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(eigen)
 set(BUILD_TESTING ON CACHE BOOL "" FORCE)
 
+# Mark Eigen includes as SYSTEM so our -Wconversion etc. don't fire on Eigen
+# headers (Eigen 3.4.0 has -Wsign-conversion and -Wold-style-cast issues in
+# internal headers, especially visible under GCC cross-compilation).
+# Eigen3::Eigen is an ALIAS, so we modify the underlying 'eigen' target.
+if(TARGET eigen)
+    get_target_property(_eigen_inc eigen INTERFACE_INCLUDE_DIRECTORIES)
+    if(_eigen_inc)
+        set_target_properties(eigen PROPERTIES
+            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_eigen_inc}")
+    endif()
+endif()
+
 # ─── Kinetra Core Library ────────────────────────────────────────────────────
 add_library(kinetra STATIC
     # Core
